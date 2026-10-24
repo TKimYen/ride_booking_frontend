@@ -19,7 +19,7 @@ function summarize(list: ReviewResponse[]): ReviewSummaryResponse {
 const visibleOfCompany = (companyId: number) =>
   reviews.filter((r) => r.companyId === companyId && !r.hidden).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
-/** Mới — GET /api/reviews/company/{companyId}?rating= (điểm theo nhà xe, PROJECT_STATUS Q3) */
+/** Mới — GET /api/reviews/company/{companyId}?rating= (điểm theo nhà xe) */
 export const listCompanyReviews = (companyId: number, viewerId: number | null, rating?: number, page = 0, size = 5) =>
   mock((): PageResponse<ReviewResponse> => {
     const list = visibleOfCompany(companyId).filter((r) => !rating || r.rating === rating);

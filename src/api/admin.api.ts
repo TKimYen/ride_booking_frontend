@@ -492,7 +492,7 @@ export const adminUnlockUser = (id: number) =>
     return { ok: true };
   });
 
-// ============ Dashboard (Mới — /api/admin/stats/*, định nghĩa PROJECT_STATUS Q4) ============
+// ============ Dashboard (Mới — /api/admin/stats/*) ============
 interface Range {
   from: string;
   to: string;

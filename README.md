@@ -144,4 +144,4 @@ Recharts (biểu đồ), Zustand, dayjs, lunar-javascript (lịch âm), qrcode.r
 - Trang **không** đọc `mock/db.ts` trực tiếp, chỉ gọi hàm trong `src/api/`.
 - Giá, ghế trống, hạn giữ chỗ đều lấy từ "server" (lớp API); FE chỉ cộng để hiển thị tạm.
 - Lỗi nghiệp vụ hiện nguyên văn thông điệp (toast hoặc dưới ô nhập); danh sách luôn có trạng thái đang tải / rỗng / lỗi.
-- Màu chính `#2474E5`, nút hành động `#FFC700`, font Be Vietnam Pro (thiết kế ở `../HUONG_DAN_FRONTEND.md` B4).
+- Màu chính `#2474E5`, nút hành động `#FFC700`, font Be Vietnam Pro.
