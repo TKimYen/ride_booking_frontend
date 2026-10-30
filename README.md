@@ -119,7 +119,7 @@ Giao diện khách hàng dùng được trên điện thoại (bộ lọc thành
 ```
 src/
 ├─ api/            # "Lớp API": mỗi hàm ứng với một endpoint backend (ghi trong comment)
-│  ├─ client.ts    # mock() giả độ trễ, ApiError(status, message), paginate()
+│  ├─ client.ts    # apiClient (Axios, refresh JWT, X-Guest-Token) và helper mock()
 │  └─ catalog · trips · bookings · promotions · reviews · auth · admin .api.ts
 ├─ mock/db.ts      # dữ liệu cứng trong bộ nhớ
 ├─ types/          # DTO trùng tên trường với JSON backend
