@@ -1,6 +1,6 @@
 import { Search } from 'lucide-react';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { cancelBooking, lookupBooking } from '../../api/bookings.api';
 import { errorMessage } from '../../api/client';
 import TicketView from '../../components/booking/TicketView';
@@ -13,9 +13,10 @@ import type { BookingResponse } from '../../types';
 /** /tra-cuu-ve — mã vé + SĐT. Sai thông tin luôn báo chung, không tiết lộ mã có tồn tại. */
 export default function LookupPage() {
   useDocumentTitle('Tra cứu vé');
+  const [params] = useSearchParams();
   const user = useAuthStore((s) => s.user);
   const saveGuestTicket = useBookingStore((s) => s.saveGuestTicket);
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState(() => params.get('bookingCode') ?? '');
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');

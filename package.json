@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "antd": "^5.22.2",
+    "axios": "^1.21.0",
     "dayjs": "^1.11.13",
     "lucide-react": "^0.460.0",
     "lunar-javascript": "^1.6.12",
