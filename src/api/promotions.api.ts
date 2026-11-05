@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
-import { promotions, seatsOf, trips } from '../mock/db';
+import { promotions, trips } from '../mock/db';
 import type { PromotionResponse, PromotionValidateResponse } from '../types';
-import { ApiError, mock } from './client';
+import { ApiError, apiClient } from './client';
 
 export const isUsable = (p: PromotionResponse, now = dayjs()) =>
   p.active &&
@@ -38,26 +38,17 @@ export function applyPromotion(code: string, tripId: number, subtotal: number) {
 }
 
 /** GET /api/promotions?featured=true — Ưu đãi nổi bật ở Trang chủ. */
-export const getFeaturedPromotions = () => mock(() => promotions.filter((p) => p.featured && isUsable(p)));
+export const getFeaturedPromotions = () => apiClient.get<PromotionResponse[]>('/api/promotions', { params: { featured: true } }).then((r) => r.data);
 
 /** GET /api/promotions — trang Ưu đãi. */
-export const getActivePromotions = () => mock(() => promotions.filter((p) => isUsable(p)));
+export const getActivePromotions = () => apiClient.get<PromotionResponse[]>('/api/promotions').then((r) => r.data);
 
 /** GET /api/promotions?tripId= — tab Giảm giá. */
 export const getPromotionsForTrip = (tripId: number) =>
-  mock(() => {
-    const trip = trips.find((t) => t.id === tripId)!;
-    return promotions.filter(
-      (p) =>
-        isUsable(p) && (p.companyId == null || p.companyId === trip.companyId) && (p.routeId == null || p.routeId === trip.routeId),
-    );
-  });
+  apiClient.get<PromotionResponse[]>('/api/promotions', { params: { tripId } }).then((r) => r.data);
 
 /** POST /api/promotions/validate {tripId, seatIds, code} */
 export const validatePromotion = (tripId: number, seatIds: number[], code: string) =>
-  mock((): PromotionValidateResponse => {
-    const seats = seatsOf(tripId).filter((s) => seatIds.includes(s.id));
-    const subtotal = seats.reduce((sum, s) => sum + s.totalPrice, 0);
-    const { promotion, discount } = applyPromotion(code, tripId, subtotal);
-    return { code: promotion.code, subtotal, discount, total: subtotal - discount };
-  });
+  apiClient
+    .post<PromotionValidateResponse>('/api/promotions/validate', { tripId, seatIds, code })
+    .then((r) => r.data);
