@@ -1,7 +1,7 @@
 import { CreditCard, FlaskConical, Lock, Wallet } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useBlocker, useNavigate, useParams } from 'react-router-dom';
-import { cancelBooking, getBooking, payDemo } from '../../api/bookings.api';
+import { cancelBooking, createStripeCheckoutSession, getBooking, payDemo } from '../../api/bookings.api';
 import { errorMessage } from '../../api/client';
 import { BookingStepper, HoldTimer } from '../../components/booking';
 import { ErrorBox, Modal, Skeleton, toast } from '../../components/common';
@@ -21,7 +21,6 @@ export default function PaymentPage() {
   const { data: b, loading, error } = useAsync(() => getBooking(bookingId, user?.id ?? null, guestToken), [bookingId]);
   const [method, setMethod] = useState<Method>('STRIPE');
   const [paying, setPaying] = useState(false);
-  const [stripeOpen, setStripeOpen] = useState(false);
   const [done, setDone] = useState(false);
   useDocumentTitle('Thanh toán');
 
@@ -53,15 +52,19 @@ export default function PaymentPage() {
   const pay = async () => {
     setPaying(true);
     try {
-      await payDemo(bookingId, user?.id ?? null, guestToken);
-      setDone(true);
-      leaving.current = true;
-      navigate(`/dat-ve/ket-qua?bookingId=${bookingId}&status=success`, { replace: true });
+      if (method === 'STRIPE') {
+        const session = await createStripeCheckoutSession(bookingId, guestToken);
+        window.location.assign(session.checkoutUrl);
+      } else {
+        await payDemo(bookingId, user?.id ?? null, guestToken);
+        setDone(true);
+        leaving.current = true;
+        navigate(`/dat-ve/ket-qua?bookingId=${bookingId}&status=success`, { replace: true });
+      }
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
       setPaying(false);
-      setStripeOpen(false);
     }
   };
 
@@ -126,29 +129,11 @@ export default function PaymentPage() {
             <span className="font-semibold">Tổng thanh toán</span>
             <span className="text-xl font-bold text-primary">{formatVND(b.totalPrice)}</span>
           </div>
-          <button className="btn-cta mt-4 w-full" disabled={paying || timedOut} onClick={() => (method === 'STRIPE' ? setStripeOpen(true) : pay())}>
+          <button className="btn-cta mt-4 w-full" disabled={paying || timedOut} onClick={pay}>
             {paying ? 'Đang xử lý...' : 'Thanh toán'}
           </button>
         </aside>
       </div>
-
-      {/* Giả lập trang Stripe Checkout (bản thật: window.location = checkoutUrl) */}
-      <Modal open={stripeOpen} onClose={() => !paying && setStripeOpen(false)} title="Stripe Checkout (giả lập)">
-        <div className="space-y-3 text-sm">
-          <div className="rounded-input bg-bg px-3 py-2">
-            Số tiền: <b>{formatVND(b.totalPrice)}</b>
-          </div>
-          <input className="input" defaultValue="4242 4242 4242 4242" aria-label="Số thẻ" />
-          <div className="flex gap-2">
-            <input className="input" defaultValue="12/30" aria-label="Hạn thẻ" />
-            <input className="input" defaultValue="123" aria-label="CVC" />
-          </div>
-          <p className="m-0 text-xs text-muted">Dùng thẻ test 4242… của Stripe. Ở bản thật trang này do Stripe hiển thị.</p>
-          <button className="btn-primary w-full" disabled={paying} onClick={pay}>
-            {paying ? 'Đang thanh toán...' : `Trả ${formatVND(b.totalPrice)}`}
-          </button>
-        </div>
-      </Modal>
 
       <Modal open={blocker.state === 'blocked'} onClose={() => blocker.reset?.()} title="Giữ chỗ hay huỷ chỗ?">
         <p className="mt-0 text-sm">
