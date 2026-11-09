@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
-import { bookings, createBookingRecord, fmt, promotions, seatsOf, trips } from '../mock/db';
+import { bookings, createBookingRecord, fmt, seatsOf, trips } from '../mock/db';
 import type { BookingResponse, BookingStatus, HoldSeatsRequest, PageResponse } from '../types';
-import { ApiError, mock, paginate } from './client';
+import { ApiError, apiClient, mock, paginate } from './client';
 import { applyPromotion } from './promotions.api';
 
 const HOLD_MINUTES = 10;
@@ -36,16 +36,6 @@ function view(b: BookingResponse): BookingResponse {
   const holdSecondsRemaining =
     b.status === 'PENDING' && b.expiresAt ? Math.max(0, dayjs(b.expiresAt).diff(dayjs(), 'second')) : null;
   return { ...b, holdSecondsRemaining };
-}
-
-function requireAccessible(id: number, userId: number | null, guestToken?: string | null, allowAdmin = false) {
-  expireStale();
-  const b = bookings.find((x) => x.id === id);
-  if (!b) throw new ApiError(404, `Không tìm thấy đơn đặt vé với id ${id}`);
-  const owner = userId != null && b.userId === userId;
-  const guestOk = b.guest && guestToken != null && guestTokens.get(id) === guestToken;
-  if (!owner && !guestOk && !allowAdmin) throw new ApiError(403, 'Bạn không có quyền truy cập đơn đặt vé này');
-  return b;
 }
 
 /**
@@ -113,59 +103,31 @@ export const holdSeats = (userId: number | null, req: HoldSeatsRequest) =>
 
 /** POST /api/bookings/{id}/pay — thanh toán demo (môi trường dev). */
 export const payDemo = (id: number, userId: number | null, guestToken?: string | null) =>
-  mock((): BookingResponse => {
-    const b = requireAccessible(id, userId, guestToken);
-    if (b.status === 'PAID') return view(b);
-    if (b.status === 'EXPIRED') throw new ApiError(409, 'Đơn đã hết hạn thanh toán, vui lòng đặt lại');
-    if (b.status !== 'PENDING') throw new ApiError(409, 'Đơn không ở trạng thái chờ thanh toán');
-    const seats = seatsOf(b.trip.id);
-    b.seats.forEach((bs) => {
-      const seat = seats.find((s) => s.id === bs.seatId)!;
-      seat.status = 'BOOKED';
-      seat.holdingUntil = null;
-    });
-    b.status = 'PAID';
-    b.payment = {
-      id: Date.now(),
-      gateway: 'STRIPE',
-      transactionNo: `DEMO${Date.now()}`,
-      amount: b.totalPrice,
-      bankCode: null,
+  (void userId, apiClient)
+    .post<BookingResponse>(`/api/bookings/${id}/pay`, {
+      gateway: 'VNPAY',
       responseCode: '00',
-      status: 'SUCCESS',
-      createdAt: fmt(dayjs()),
-    };
-    if (b.promotionCode) {
-      const p = promotions.find((x) => x.code === b.promotionCode);
-      if (p) p.usedCount += 1;
-    }
-    return view(b);
-  }, 900);
+    }, { guestToken: guestToken ?? undefined })
+    .then((r) => r.data);
+
+export const createStripeCheckoutSession = (id: number, guestToken?: string | null) =>
+  apiClient
+    .post<{ bookingId: number; sessionId: string; checkoutUrl: string; amount: number; currency: string; expiresAt: string }>(
+      '/api/payments/checkout-session',
+      { bookingId: id },
+      { guestToken: guestToken ?? undefined },
+    )
+    .then((r) => r.data);
 
 /** POST /api/bookings/{id}/cancel — chỉ đơn PENDING còn hạn. */
 export const cancelBooking = (id: number, userId: number | null, guestToken?: string | null) =>
-  mock((): BookingResponse => {
-    const b = requireAccessible(id, userId, guestToken);
-    if (b.status === 'CANCELLED') return view(b);
-    if (b.status === 'PAID')
-      throw new ApiError(409, 'Đơn đã thanh toán, không thể huỷ trực tuyến. Vui lòng liên hệ nhà xe để được hoàn tiền.');
-    if (b.status !== 'PENDING') throw new ApiError(409, 'Đơn không thể huỷ ở trạng thái hiện tại');
-    const seats = seatsOf(b.trip.id);
-    b.seats.forEach((bs) => {
-      const seat = seats.find((s) => s.id === bs.seatId)!;
-      if (seat.status === 'HOLDING') {
-        seat.status = 'AVAILABLE';
-        seat.holdingUntil = null;
-      }
-    });
-    b.status = 'CANCELLED';
-    b.cancelReason = 'Khách huỷ';
-    return view(b);
-  });
+  (void userId, apiClient)
+    .post<BookingResponse>(`/api/bookings/${id}/cancel`, undefined, { guestToken: guestToken ?? undefined })
+    .then((r) => r.data);
 
 /** GET /api/bookings/{id} */
 export const getBooking = (id: number, userId: number | null, guestToken?: string | null, isAdmin = false) =>
-  mock(() => view(requireAccessible(id, userId, guestToken, isAdmin)));
+  (void userId, void isAdmin, apiClient.get<BookingResponse>(`/api/bookings/${id}`, { guestToken: guestToken ?? undefined })).then((r) => r.data);
 
 /** GET /api/bookings?status=A,B — Đơn hàng của tôi */
 export const listMyBookings = (userId: number, statuses: BookingStatus[], page = 0, size = 10) =>
@@ -180,17 +142,9 @@ export const listMyBookings = (userId: number, statuses: BookingStatus[], page =
 
 /** POST /api/bookings/lookup {bookingCode, phone} — đơn khách vãng lai được cấp token mới. */
 export const lookupBooking = (bookingCode: string, phone: string) =>
-  mock((): BookingResponse => {
-    expireStale();
-    const b = bookings.find(
-      (x) => x.bookingCode === bookingCode.trim().toUpperCase() && x.contactPhone === phone.trim(),
-    );
-    if (!b) throw new ApiError(404, 'Không tìm thấy vé với mã và số điện thoại này');
-    if (!b.guest) return view(b);
-    const token = newToken();
-    guestTokens.set(b.id, token);
-    return { ...view(b), guestToken: token };
-  }, 500);
+  apiClient
+    .post<BookingResponse>('/api/bookings/lookup', { bookingCode, phone })
+    .then((r) => r.data);
 
 /** POST /api/bookings/claim {bookingCode, phone} — gắn vé khách vãng lai vào tài khoản. */
 export const claimBooking = (userId: number, bookingCode: string, phone: string) =>

@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
-import { promotions, seatsOf, trips } from '../mock/db';
+import { promotions, trips } from '../mock/db';
 import type { PromotionResponse, PromotionValidateResponse } from '../types';
-import { ApiError, get, mock } from './client';
+import { ApiError, apiClient, get } from './client';
 
 export const isUsable = (p: PromotionResponse, now = dayjs()) =>
   p.active &&
@@ -48,9 +48,6 @@ export const getPromotionsForTrip = (tripId: number) => get<PromotionResponse[]>
 
 /** POST /api/promotions/validate {tripId, seatIds, code} */
 export const validatePromotion = (tripId: number, seatIds: number[], code: string) =>
-  mock((): PromotionValidateResponse => {
-    const seats = seatsOf(tripId).filter((s) => seatIds.includes(s.id));
-    const subtotal = seats.reduce((sum, s) => sum + s.totalPrice, 0);
-    const { promotion, discount } = applyPromotion(code, tripId, subtotal);
-    return { code: promotion.code, subtotal, discount, total: subtotal - discount };
-  });
+  apiClient
+    .post<PromotionValidateResponse>('/api/promotions/validate', { tripId, seatIds, code })
+    .then((r) => r.data);
