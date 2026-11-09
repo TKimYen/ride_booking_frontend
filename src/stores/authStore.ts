@@ -17,13 +17,18 @@ interface AuthState {
  */
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       user: null,
       accessToken: null,
       refreshToken: null,
       setSession: ({ user, accessToken, refreshToken }) => set({ user, accessToken, refreshToken }),
       updateUser: (patch) => set((s) => (s.user ? { user: { ...s.user, ...patch } } : s)),
-      logout: () => set({ user: null, accessToken: null, refreshToken: null }),
+      logout: () => {
+        const { refreshToken } = get();
+        set({ user: null, accessToken: null, refreshToken: null });
+        // Thu hồi refresh token ở server. Import động để store không phụ thuộc vòng vào client.ts.
+        if (refreshToken) void import('../api/auth.api').then((m) => m.logoutSession(refreshToken));
+      },
     }),
     { name: 'xego-auth' },
   ),

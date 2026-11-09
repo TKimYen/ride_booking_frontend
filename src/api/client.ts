@@ -40,7 +40,21 @@ const baseURL = import.meta.env.VITE_API_BASE_URL?.trim() || 'http://localhost:8
 export const apiClient = axios.create({
   baseURL,
   headers: { 'Content-Type': 'application/json' },
+  // Mảng gửi dạng lặp khoá `companyIds=1&companyIds=3` — Spring @RequestParam List đọc được,
+  // còn mặc định của axios là `companyIds[]=1` thì Spring bỏ qua.
+  paramsSerializer: { indexes: null },
 });
+
+/** GET và trả thẳng body. Bỏ các tham số null/undefined/rỗng để không gửi `?keyword=`. */
+export async function get<T>(url: string, params?: Record<string, unknown>): Promise<T> {
+  const clean = params
+    ? Object.fromEntries(
+        Object.entries(params).filter(([, v]) => v != null && v !== '' && !(Array.isArray(v) && v.length === 0)),
+      )
+    : undefined;
+  const { data } = await apiClient.get<T>(url, { params: clean });
+  return data;
+}
 
 function toApiError(error: unknown): ApiError {
   if (axios.isAxiosError(error)) {

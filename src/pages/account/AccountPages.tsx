@@ -17,7 +17,7 @@ export function ProfilePage() {
   useDocumentTitle('Thông tin tài khoản');
   const user = useAuthStore((s) => s.user)!;
   const updateUser = useAuthStore((s) => s.updateUser);
-  const { data, loading, error, reload } = useAsync(() => getMyProfile(user.id), [user.id]);
+  const { data, loading, error, reload } = useAsync(() => getMyProfile(), [user.id]);
   const [form, setForm] = useState<Pick<UserProfile, 'fullName' | 'phone' | 'dob' | 'gender'> | null>(null);
   const [saving, setSaving] = useState(false);
   const [phoneError, setPhoneError] = useState('');
@@ -26,8 +26,8 @@ export function ProfilePage() {
     if (data) setForm({ fullName: data.fullName, phone: data.phone, dob: data.dob, gender: data.gender });
   }, [data]);
 
-  if (loading || !form) return <Skeleton className="h-80" />;
   if (error) return <ErrorBox message={error} onRetry={reload} />;
+  if (loading || !form) return <Skeleton className="h-80" />;
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,7 +35,7 @@ export function ProfilePage() {
     setPhoneError('');
     setSaving(true);
     try {
-      const p = await updateMyProfile(user.id, form);
+      const p = await updateMyProfile(form);
       updateUser({ fullName: p.fullName });
       toast.success('Đã lưu thông tin');
     } catch (err) {
@@ -95,6 +95,12 @@ export function MyBookingsPage() {
   const tab = TABS.find((t) => t.key === params.get('tab')) ?? TABS[0];
   const [page, setPage] = useState(0);
   const { data, loading, error, reload } = useAsync(() => listMyBookings(user.id, tab.statuses, page, 10), [tab.key, page]);
+  // Đơn nào đã đánh giá lấy từ GET /api/reviews/me, chỉ cần ở tab "Đã đi".
+  const mine = useAsync(
+    () => (tab.key === 'done' ? listMyReviews() : Promise.resolve([])),
+    [tab.key],
+  );
+  const reviewedIds = new Set((mine.data ?? []).map((r) => r.bookingId));
   const [claimOpen, setClaimOpen] = useState(false);
 
   return (
@@ -131,7 +137,7 @@ export function MyBookingsPage() {
       ) : (
         <div className="space-y-3">
           {data!.content.map((b) => (
-            <BookingCard key={b.id} b={b} onChanged={reload} />
+            <BookingCard key={b.id} b={b} reviewed={!!b.reviewed || reviewedIds.has(b.id)} onChanged={reload} />
           ))}
           {data!.totalPages > 1 && (
             <div className="flex items-center justify-center gap-2 text-sm">
@@ -147,7 +153,7 @@ export function MyBookingsPage() {
   );
 }
 
-function BookingCard({ b, onChanged }: { b: BookingResponse; onChanged: () => void }) {
+function BookingCard({ b, reviewed, onChanged }: { b: BookingResponse; reviewed: boolean; onChanged: () => void }) {
   const user = useAuthStore((s) => s.user)!;
   const left = useCountdown(b.status === 'PENDING' ? b.expiresAt : null);
   const cancel = async () => {
@@ -193,7 +199,7 @@ function BookingCard({ b, onChanged }: { b: BookingResponse; onChanged: () => vo
           <Link to={`/tai-khoan/don-hang/${b.id}`} className="btn-ghost h-9">Xem vé</Link>
         )}
         {b.status === 'COMPLETED' &&
-          (b.reviewed ? (
+          (reviewed ? (
             <Link to="/tai-khoan/danh-gia" className="btn-ghost h-9">Xem đánh giá</Link>
           ) : (
             <Link to={`/tai-khoan/danh-gia/${b.id}`} className="btn-primary h-9">Đánh giá</Link>
@@ -306,20 +312,21 @@ export function WriteReviewPage() {
   const user = useAuthStore((s) => s.user)!;
   const navigate = useNavigate();
   const { data: b, loading, error } = useAsync(() => getBooking(bookingId, user.id), [bookingId]);
+  const mine = useAsync(() => listMyReviews(), [bookingId]);
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
   const [saving, setSaving] = useState(false);
 
-  if (loading) return <Skeleton className="h-80" />;
+  if (loading || mine.loading) return <Skeleton className="h-80" />;
   if (error) return <ErrorBox message={error} />;
   if (b!.status !== 'COMPLETED') return <ErrorBox message="Bạn chỉ đánh giá được chuyến mình đã đi." />;
-  if (b!.reviewed) return <Empty title="Bạn đã đánh giá chuyến này" action={<Link to="/tai-khoan/danh-gia" className="btn-primary">Xem đánh giá</Link>} />;
+  if (b!.reviewed || mine.data?.some((r) => r.bookingId === bookingId)) return <Empty title="Bạn đã đánh giá chuyến này" action={<Link to="/tai-khoan/danh-gia" className="btn-primary">Xem đánh giá</Link>} />;
 
   const submit = async () => {
     if (!rating) return toast.error('Vui lòng chọn số sao');
     setSaving(true);
     try {
-      await createReview(user.id, bookingId, rating, comment);
+      await createReview(bookingId, rating, comment);
       toast.success('Cảm ơn bạn đã đánh giá!');
       navigate('/tai-khoan/danh-gia');
     } catch (e) {
@@ -362,13 +369,13 @@ export function WriteReviewPage() {
 export function MyReviewsPage() {
   useDocumentTitle('Đánh giá của tôi');
   const user = useAuthStore((s) => s.user)!;
-  const { data, loading, error, reload } = useAsync(() => listMyReviews(user.id), [user.id]);
+  const { data, loading, error, reload } = useAsync(() => listMyReviews(), [user.id]);
   const [editing, setEditing] = useState<{ id: number; rating: number; comment: string } | null>(null);
 
   const save = async () => {
     if (!editing) return;
     try {
-      await updateReview(user.id, editing.id, editing.rating, editing.comment);
+      await updateReview(editing.id, editing.rating, editing.comment);
       toast.success('Đã cập nhật đánh giá');
       setEditing(null);
       reload();
@@ -378,9 +385,13 @@ export function MyReviewsPage() {
   };
   const remove = async (id: number) => {
     if (!confirm('Xoá đánh giá này?')) return;
-    await deleteReview(user.id, false, id);
-    toast.success('Đã xoá đánh giá');
-    reload();
+    try {
+      await deleteReview(id);
+      toast.success('Đã xoá đánh giá');
+      reload();
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
   };
 
   if (loading) return <Skeleton className="h-64" />;
@@ -402,7 +413,7 @@ export function MyReviewsPage() {
               {r.hidden && <span className="ml-2 text-xs text-danger">Đã bị ẩn do vi phạm</span>}
               <p className="mb-2 mt-1 text-sm">{r.comment || <i className="text-muted">Không có bình luận</i>}</p>
               <div className="flex gap-2">
-                <button className="btn-ghost h-8" onClick={() => setEditing({ id: r.id, rating: r.rating, comment: r.comment })}>Sửa</button>
+                <button className="btn-ghost h-8" onClick={() => setEditing({ id: r.id, rating: r.rating, comment: r.comment ?? '' })}>Sửa</button>
                 <button className="btn-danger h-8" onClick={() => remove(r.id)}>Xoá</button>
               </div>
             </div>
@@ -434,7 +445,6 @@ export function MyReviewsPage() {
 // ---------------- Bảo mật ----------------
 export function SecurityPage() {
   useDocumentTitle('Bảo mật');
-  const user = useAuthStore((s) => s.user)!;
   const logout = useAuthStore((s) => s.logout);
   const navigate = useNavigate();
   const [form, setForm] = useState({ current: '', next: '', confirm: '' });
@@ -446,7 +456,7 @@ export function SecurityPage() {
     if (form.next.length < 8) return setError('Mật khẩu mới tối thiểu 8 ký tự');
     if (form.next !== form.confirm) return setError('Mật khẩu nhập lại không khớp');
     try {
-      await changePassword(user.id, form.current, form.next);
+      await changePassword(form.current, form.next);
       toast.success('Đã đổi mật khẩu');
       setForm({ current: '', next: '', confirm: '' });
     } catch (err) {

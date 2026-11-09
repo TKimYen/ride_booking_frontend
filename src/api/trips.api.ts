@@ -1,8 +1,5 @@
-import dayjs from 'dayjs';
-import { seatsOf, stopPoints, trips } from '../mock/db';
-import type { BusType, PageResponse, SeatMapResponse, TripSearchItemResponse } from '../types';
-import { ratingOfCompany } from './catalog.api';
-import { ApiError, mock, paginate } from './client';
+import type { BusType, PageResponse, SeatMapResponse, StopPointResponse, TripSearchItemResponse } from '../types';
+import { get } from './client';
 
 export type TripSort = 'departureAsc' | 'departureDesc' | 'priceAsc' | 'priceDesc';
 
@@ -12,7 +9,7 @@ export interface TripSearchParams {
   travelDate?: string;
   earliestDeparture?: string; // HH:mm
   latestDeparture?: string;
-  /** Mới (BE việc 4.4): nhiều nhà xe, loại xe, điểm đón/trả */
+  /** BE việc 4.4: nhiều nhà xe, loại xe, điểm đón/trả */
   companyIds?: number[];
   busTypes?: BusType[];
   pickupPoints?: string[];
@@ -24,110 +21,26 @@ export interface TripSearchParams {
   size?: number;
 }
 
-const isFree = (status: string, holdingUntil: string | null, now: dayjs.Dayjs) =>
-  status === 'AVAILABLE' || (status === 'HOLDING' && holdingUntil != null && dayjs(holdingUntil).isBefore(now));
+/** "06:00" -> "06:00:00": backend nhận LocalTime dạng ISO đầy đủ. */
+const isoTime = (t?: string) => (t && t.length === 5 ? `${t}:00` : t);
 
-function toItem(tripId: number): TripSearchItemResponse {
-  const trip = trips.find((t) => t.id === tripId)!;
-  const seats = seatsOf(trip.id);
-  const now = dayjs();
-  const available = seats.filter((s) => isFree(s.status, s.holdingUntil, now)).length;
-  const rating = ratingOfCompany(trip.companyId);
-  const stops = stopPoints.filter((s) => s.tripId === trip.id);
-  return {
-    trip,
-    availableSeats: available,
-    unavailableSeats: seats.length - available,
-    rating: rating.averageRating,
-    ratingCount: rating.totalReviews,
-    pickupPreview: stops.find((s) => s.pointType === 'PICKUP')?.name,
-    dropoffPreview: stops.filter((s) => s.pointType === 'DROPOFF').slice(-1)[0]?.name,
-  };
-}
-
-/** GET /api/trips — chỉ chuyến ACTIVE chưa khởi hành. */
+/** GET /api/trips — chỉ chuyến ACTIVE; mỗi dòng kèm số ghế trống, điểm nhà xe, điểm đón/trả. */
 export const searchTrips = (p: TripSearchParams) =>
-  mock((): PageResponse<TripSearchItemResponse> => {
-    const now = dayjs();
-    let list = trips.filter((t) => t.status === 'ACTIVE' && dayjs(t.departureTime).isAfter(now));
-    if (p.originId) list = list.filter((t) => t.originId === p.originId);
-    if (p.destinationId) list = list.filter((t) => t.destinationId === p.destinationId);
-    if (p.travelDate) list = list.filter((t) => t.departureTime.startsWith(p.travelDate!));
-    if (p.earliestDeparture) list = list.filter((t) => t.departureTime.slice(11, 16) >= p.earliestDeparture!);
-    if (p.latestDeparture) list = list.filter((t) => t.departureTime.slice(11, 16) <= p.latestDeparture!);
-    if (p.companyIds?.length) list = list.filter((t) => p.companyIds!.includes(t.companyId));
-    if (p.busTypes?.length) list = list.filter((t) => p.busTypes!.includes(t.busType));
-    if (p.minPrice != null) list = list.filter((t) => t.basePrice >= p.minPrice!);
-    if (p.maxPrice != null) list = list.filter((t) => t.basePrice <= p.maxPrice!);
-    const hasStop = (tripId: number, type: 'PICKUP' | 'DROPOFF', names: string[]) =>
-      stopPoints.some((s) => s.tripId === tripId && s.pointType === type && names.includes(s.name));
-    if (p.pickupPoints?.length) list = list.filter((t) => hasStop(t.id, 'PICKUP', p.pickupPoints!));
-    if (p.dropoffPoints?.length) list = list.filter((t) => hasStop(t.id, 'DROPOFF', p.dropoffPoints!));
-
-    const sort = p.sort ?? 'departureAsc';
-    list = [...list].sort((a, b) => {
-      if (sort === 'priceAsc') return a.basePrice - b.basePrice || a.departureTime.localeCompare(b.departureTime);
-      if (sort === 'priceDesc') return b.basePrice - a.basePrice || a.departureTime.localeCompare(b.departureTime);
-      if (sort === 'departureDesc') return b.departureTime.localeCompare(a.departureTime);
-      return a.departureTime.localeCompare(b.departureTime);
-    });
-    const page = paginate(list, p.page ?? 0, p.size ?? 10);
-    return { ...page, content: page.content.map((t) => toItem(t.id)) };
+  get<PageResponse<TripSearchItemResponse>>('/api/trips', {
+    ...p,
+    earliestDeparture: isoTime(p.earliestDeparture),
+    latestDeparture: isoTime(p.latestDeparture),
   });
 
-/** Mới — GET /api/stop-points/options (BE việc 6.1): tên điểm đón/trả để hiện checkbox lọc. */
+/** GET /api/stop-points/options — tên điểm đón/trả để hiện checkbox lọc. */
 export const getStopPointOptions = (originId?: number, destinationId?: number, travelDate?: string) =>
-  mock(() => {
-    const ids = new Set(
-      trips
-        .filter(
-          (t) =>
-            t.status === 'ACTIVE' &&
-            (!originId || t.originId === originId) &&
-            (!destinationId || t.destinationId === destinationId) &&
-            (!travelDate || t.departureTime.startsWith(travelDate)),
-        )
-        .map((t) => t.id),
-    );
-    const names = (type: 'PICKUP' | 'DROPOFF') =>
-      [...new Set(stopPoints.filter((s) => ids.has(s.tripId) && s.pointType === type).map((s) => s.name))].sort();
-    return { pickups: names('PICKUP'), dropoffs: names('DROPOFF') };
-  }, 80);
+  get<{ pickups: string[]; dropoffs: string[] }>('/api/stop-points/options', { originId, destinationId, travelDate });
 
-/** GET /api/trips/{id} (kèm số ghế trống và rating như một dòng tìm kiếm) */
-export const getTrip = (id: number) =>
-  mock(() => {
-    if (!trips.some((t) => t.id === id)) throw new ApiError(404, `Không tìm thấy chuyến xe với id ${id}`);
-    return toItem(id);
-  });
+/** GET /api/trips/{id}/detail — một chuyến cùng hình dạng một dòng tìm kiếm. */
+export const getTrip = (id: number) => get<TripSearchItemResponse>(`/api/trips/${id}/detail`);
 
 /** GET /api/seats/trip/{tripId} */
-export const getSeatMap = (tripId: number) =>
-  mock((): SeatMapResponse => {
-    const trip = trips.find((t) => t.id === tripId);
-    if (!trip) throw new ApiError(404, `Không tìm thấy chuyến xe với id ${tripId}`);
-    const now = dayjs();
-    const seats = seatsOf(tripId).map((s) =>
-      s.status === 'HOLDING' && isFree(s.status, s.holdingUntil, now)
-        ? { ...s, status: 'AVAILABLE' as const, holdingUntil: null }
-        : s,
-    );
-    return {
-      tripId,
-      busTypeName: trip.busTypeName,
-      floors: trip.busType === 'SLEEPER_45' ? 1 : 2,
-      totalSeats: seats.length,
-      availableSeats: seats.filter((s) => s.status === 'AVAILABLE').length,
-      basePrice: trip.basePrice,
-      holdSecondsRemaining: null,
-      seats,
-    };
-  }, 150);
+export const getSeatMap = (tripId: number) => get<SeatMapResponse>(`/api/seats/trip/${tripId}`);
 
 /** GET /api/stop-points/trip/{tripId} — điểm đón trước, theo stopOrder. */
-export const getStopPoints = (tripId: number) =>
-  mock(() =>
-    stopPoints
-      .filter((s) => s.tripId === tripId)
-      .sort((a, b) => (a.pointType === b.pointType ? a.stopOrder - b.stopOrder : a.pointType === 'PICKUP' ? -1 : 1)),
-  );
+export const getStopPoints = (tripId: number) => get<StopPointResponse[]>(`/api/stop-points/trip/${tripId}`);

@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import { BadgePercent, Clock3, Headphones, ShieldCheck, Bus } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getPopularRoutes } from '../../api/catalog.api';
+import { getAllLocations, getPopularRoutes } from '../../api/catalog.api';
 import { getFeaturedPromotions } from '../../api/promotions.api';
 import { Modal, Skeleton } from '../../components/common';
 import SearchForm from '../../components/search/SearchForm';
@@ -11,12 +11,13 @@ import { useAsync, useDocumentTitle } from '../../hooks';
 import { loadRecentSearches } from '../../stores/bookingStore';
 import type { PromotionResponse } from '../../types';
 import { formatShortDate, formatVND } from '../../utils/format';
-import { locations } from '../../mock/db';
 
 export default function HomePage() {
   useDocumentTitle('');
   const promos = useAsync(getFeaturedPromotions, []);
   const popular = useAsync(() => getPopularRoutes(6), []);
+  const locations = useAsync(getAllLocations, []);
+  const slugOf = (id: number) => locations.data?.find((l) => l.id === id)?.slug;
   const [promo, setPromo] = useState<PromotionResponse | null>(null);
   const recent = loadRecentSearches().filter((r) => !dayjs(r.date).isBefore(dayjs(), 'day'));
   const tomorrow = dayjs().add(1, 'day').format('YYYY-MM-DD');
@@ -75,12 +76,14 @@ export default function HomePage() {
       <section className="container-x mt-10">
         <h2 className="mb-4 text-xl font-bold">Tuyến đường phổ biến</h2>
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-          {popular.loading && [1, 2, 3, 4, 5, 6].map((i) => <Skeleton key={i} className="h-48" />)}
-          {popular.data?.map((r) => {
-            const o = locations.find((l) => l.id === r.originId)!;
-            const d = locations.find((l) => l.id === r.destinationId)!;
+          {(popular.loading || locations.loading) && [1, 2, 3, 4, 5, 6].map((i) => <Skeleton key={i} className="h-48" />)}
+          {popular.error && <p className="col-span-full text-sm text-muted">Chưa tải được tuyến phổ biến. {popular.error}</p>}
+          {!locations.loading && popular.data?.map((r) => {
+            const o = slugOf(r.originId);
+            const d = slugOf(r.destinationId);
+            if (!o || !d) return null;
             return (
-              <Link key={r.id} to={`/xe-khach/${o.slug}-di-${d.slug}?date=${tomorrow}`} className="card group overflow-hidden">
+              <Link key={r.id} to={`/xe-khach/${o}-di-${d}?date=${tomorrow}`} className="card group overflow-hidden">
                 <div className="h-28 overflow-hidden bg-primary-light md:h-36">
                   {r.imageUrl ? (
                     <img src={r.imageUrl} alt={r.name} className="h-full w-full object-cover transition group-hover:scale-105" loading="lazy" />

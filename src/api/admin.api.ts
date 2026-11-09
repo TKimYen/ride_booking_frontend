@@ -13,7 +13,6 @@ import {
   locations,
   profiles,
   promotions,
-  reviews,
   routes,
   seatsOf,
   slugify,
@@ -31,7 +30,6 @@ import type {
   PointType,
   PolicyType,
   PromotionResponse,
-  ReviewResponse,
   RouteResponse,
   TopRouteItem,
   TripResponse,
@@ -459,22 +457,8 @@ export const adminDeletePromotion = (id: number) =>
   });
 
 // ============ Đánh giá ============
-/** Mới — GET /api/admin/reviews?companyId&rating (gồm cả đánh giá đã ẩn) */
-export const adminListReviews = (q: { companyId?: number; rating?: number; page?: number; size?: number }) =>
-  mock((): PageResponse<ReviewResponse> => {
-    const list = reviews
-      .filter((r) => (!q.companyId || r.companyId === q.companyId) && (!q.rating || r.rating === q.rating))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return paginate(list, q.page ?? 0, q.size ?? 20);
-  });
-/** Mới — PATCH /api/admin/reviews/{id}/hidden {hidden} */
-export const adminSetReviewHidden = (id: number, hidden: boolean) =>
-  mock(() => {
-    const r = reviews.find((x) => x.id === id)!;
-    r.hidden = hidden;
-    return r;
-  });
-
+// Đã nối API thật ở reviews.api.ts (BE việc 3.4); giữ tên cũ để trang admin không phải đổi import.
+export { adminListReviews, adminSetReviewHidden } from './reviews.api';
 // ============ Người dùng ============
 /** GET /api/admin/users?keyword (user-service) */
 export const adminListUsers = (q: { keyword?: string; page?: number; size?: number }) =>

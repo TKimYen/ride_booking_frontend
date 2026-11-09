@@ -12,7 +12,7 @@ import {
   SecurityPage,
   WriteReviewPage,
 } from '../pages/account/AccountPages';
-import { ForgotPasswordPage, LoginPage, RegisterPage } from '../pages/auth/AuthPages';
+import { ForgotPasswordPage, LoginPage, RegisterPage, ResetPasswordPage, VerifyEmailPage } from '../pages/auth/AuthPages';
 import BookingPage from '../pages/customer/BookingPage';
 import HomePage from '../pages/customer/HomePage';
 import LookupPage from '../pages/customer/LookupPage';
@@ -78,6 +78,9 @@ export const router = createBrowserRouter([
       { path: '/dang-nhap', element: <LoginPage /> },
       { path: '/dang-ky', element: <RegisterPage /> },
       { path: '/quen-mat-khau', element: <ForgotPasswordPage /> },
+      // Hai đường dẫn tiếng Anh vì auth-service ghép sẵn vào link trong email (EmailTemplates).
+      { path: '/reset-password', element: <ResetPasswordPage /> },
+      { path: '/verify-email', element: <VerifyEmailPage /> },
       {
         element: <RequireAuth />,
         children: [

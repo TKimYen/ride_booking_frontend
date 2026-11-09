@@ -121,13 +121,15 @@ function StopsTab({ tripId }: { tripId: number }) {
 }
 
 function ReviewsTab({ companyId }: { companyId: number }) {
+  // Đổi người đăng nhập thì tải lại để cờ "(bạn)" đúng người.
   const viewerId = useAuthStore((s) => s.user?.id ?? null);
   const [rating, setRating] = useState<number | undefined>();
   const [page, setPage] = useState(0);
   const summary = useAsync(() => getCompanyReviewSummary(companyId), [companyId]);
-  const list = useAsync(() => listCompanyReviews(companyId, viewerId, rating, page), [companyId, rating, page]);
+  const list = useAsync(() => listCompanyReviews(companyId, rating, page), [companyId, rating, page, viewerId]);
 
   if (summary.loading) return <Spinner />;
+  if (summary.error) return <ErrorBox message={summary.error} onRetry={summary.reload} />;
   const s = summary.data!;
   if (!s.totalReviews) return <p className="text-sm text-muted">Nhà xe chưa có đánh giá nào.</p>;
   return (
@@ -161,6 +163,7 @@ function ReviewsTab({ companyId }: { companyId: number }) {
       </div>
       <div>
         {list.loading && <Spinner />}
+        {list.error && <ErrorBox message={list.error} onRetry={list.reload} />}
         {list.data?.content.length === 0 && <p className="text-sm text-muted">Không có đánh giá {rating} sao.</p>}
         <ul className="m-0 list-none space-y-4 p-0">
           {list.data?.content.map((r) => (
@@ -172,7 +175,7 @@ function ReviewsTab({ companyId }: { companyId: number }) {
                 <span className="text-xs text-muted">{formatDate(r.createdAt)}</span>
               </div>
               <Stars value={r.rating} size={12} />
-              <p className="mb-0 mt-1 text-sm">{r.comment}</p>
+              {r.comment && <p className="mb-0 mt-1 text-sm">{r.comment}</p>}
               <p className="m-0 text-xs text-muted">Tuyến {r.routeName}</p>
             </li>
           ))}
@@ -246,6 +249,7 @@ function ProfileTab({ companyId, kind }: { companyId: number; kind: 'policy' | '
 
   return (
     <div className="space-y-2">
+      {p.policies.length === 0 && <p className="text-sm text-muted">Nhà xe chưa cập nhật chính sách.</p>}
       {p.policies.map((pol) => (
         <details key={pol.id} className="rounded-card border border-solid border-line px-4 py-2" open={pol.policyType === 'CANCELLATION'}>
           <summary className="cursor-pointer text-sm font-semibold">{pol.title}</summary>

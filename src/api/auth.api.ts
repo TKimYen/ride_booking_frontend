@@ -1,7 +1,5 @@
-import dayjs from 'dayjs';
-import { DEMO_PASSWORD, fmt, users } from '../mock/db';
-import type { AuthUser, UserProfile } from '../types';
-import { ApiError, mock } from './client';
+import type { AuthUser, Role, UserProfile } from '../types';
+import { apiClient, get } from './client';
 
 export interface AuthResponse {
   accessToken: string;
@@ -9,70 +7,93 @@ export interface AuthResponse {
   user: AuthUser;
 }
 
-const toAuthUser = (u: UserProfile): AuthUser => ({ id: u.id, email: u.email, fullName: u.fullName, role: u.role });
+/** user-service lưu giới tính bằng tiếng Việt ("Nam" | "Nữ" | "Khác"); trang dùng mã cố định. */
+const GENDER_TO_API: Record<NonNullable<UserProfile['gender']>, string> = { MALE: 'Nam', FEMALE: 'Nữ', OTHER: 'Khác' };
+const GENDER_FROM_API: Record<string, UserProfile['gender']> = { Nam: 'MALE', 'Nữ': 'FEMALE', Khác: 'OTHER' };
 
-/** POST /api/auth/login */
-export const login = (email: string, password: string) =>
-  mock((): AuthResponse => {
-    const user = users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
-    const expected = DEMO_PASSWORD[user?.email ?? ''] ?? '12345678';
-    if (!user || password !== expected) throw new ApiError(401, 'Email hoặc mật khẩu không đúng');
-    if (user.locked) throw new ApiError(423, 'Tài khoản tạm khoá do đăng nhập sai nhiều lần. Thử lại sau 15 phút.');
-    user.lastLoginAt = fmt(dayjs());
-    return { accessToken: `mock-access-${user.id}`, refreshToken: `mock-refresh-${user.id}`, user: toAuthUser(user) };
-  }, 400);
+interface UserBody {
+  id: number;
+  fullName: string;
+  phone: string | null;
+  email: string;
+  dob: string | null;
+  gender: string | null;
+  role: Role;
+  createdAt: string;
+}
 
-/** POST /api/auth/register — backend gửi email xác minh qua Mailpit. */
-export const register = (fullName: string, email: string, password: string) =>
-  mock(() => {
-    if (users.some((u) => u.email.toLowerCase() === email.trim().toLowerCase()))
-      throw new ApiError(409, 'Email đã được sử dụng');
-    const user: UserProfile = {
-      id: Math.max(...users.map((u) => u.id)) + 1,
-      fullName: fullName.trim(),
-      email: email.trim(),
-      phone: null,
-      dob: null,
-      gender: null,
-      role: 'USER',
-      createdAt: fmt(dayjs()),
-      emailVerified: false,
-      lastLoginAt: null,
-      bookingCount: 0,
-    };
-    users.push(user);
-    DEMO_PASSWORD[user.email] = password;
-    return { email: user.email };
-  }, 500);
+interface AuthBody {
+  accessToken: string;
+  refreshToken: string;
+  user: UserBody;
+}
+
+const toAuthUser = (u: UserBody): AuthUser => ({ id: u.id, email: u.email, fullName: u.fullName, role: u.role });
+
+const toProfile = (u: UserBody): UserProfile => ({
+  ...u,
+  gender: u.gender ? (GENDER_FROM_API[u.gender] ?? 'OTHER') : null,
+});
+
+const toSession = (b: AuthBody): AuthResponse => ({
+  accessToken: b.accessToken,
+  refreshToken: b.refreshToken,
+  user: toAuthUser(b.user),
+});
+
+/** POST /api/auth/login — 401 sai mật khẩu, 423 tài khoản tạm khoá. */
+export const login = async (email: string, password: string) =>
+  toSession((await apiClient.post<AuthBody>('/api/auth/login', { email: email.trim(), password })).data);
+
+/**
+ * POST /api/auth/register — backend tạo tài khoản, gửi email xác minh và trả luôn cặp token,
+ * nên đăng ký xong là đã đăng nhập.
+ */
+export const register = async (fullName: string, email: string, password: string) =>
+  toSession((await apiClient.post<AuthBody>('/api/auth/register', { fullName: fullName.trim(), email: email.trim(), password })).data);
+
+/** POST /api/auth/logout — thu hồi refresh token. Lỗi mạng thì bỏ qua, trang vẫn xoá phiên. */
+export const logoutSession = async (refreshToken: string | null) => {
+  if (!refreshToken) return;
+  try {
+    await apiClient.post('/api/auth/logout', { refreshToken });
+  } catch {
+    /* phiên ở máy này vẫn bị xoá; refresh token sẽ tự hết hạn */
+  }
+};
 
 /** POST /api/auth/forgot-password — luôn trả 200 để không lộ email có tồn tại hay không. */
-export const forgotPassword = (email: string) => mock(() => ({ ok: true, email: email.trim() }), 500);
+export const forgotPassword = async (email: string) => {
+  await apiClient.post('/api/auth/forgot-password', { email: email.trim() });
+};
+
+/** POST /api/auth/reset-password — token lấy từ link trong email. */
+export const resetPassword = async (token: string, newPassword: string) => {
+  await apiClient.post('/api/auth/reset-password', { token, newPassword });
+};
+
+/** POST /api/auth/verify-email — token lấy từ link trong email. */
+export const verifyEmail = async (token: string) => {
+  await apiClient.post('/api/auth/verify-email', { token });
+};
 
 /** PUT /api/auth/password */
-export const changePassword = (userId: number, current: string, next: string) =>
-  mock(() => {
-    const user = users.find((u) => u.id === userId)!;
-    const expected = DEMO_PASSWORD[user.email] ?? '12345678';
-    if (current !== expected) throw new ApiError(400, 'Mật khẩu hiện tại không đúng');
-    DEMO_PASSWORD[user.email] = next;
-    return { ok: true };
-  });
+export const changePassword = async (currentPassword: string, newPassword: string) => {
+  await apiClient.put('/api/auth/password', { currentPassword, newPassword });
+};
 
 /** GET /api/users/me */
-export const getMyProfile = (userId: number) =>
-  mock(() => {
-    const user = users.find((u) => u.id === userId);
-    if (!user) throw new ApiError(401, 'Phiên đăng nhập đã hết hạn');
-    return user;
-  }, 120);
+export const getMyProfile = async () => toProfile(await get<UserBody>('/api/users/me'));
 
 /** PUT /api/users/me */
-export const updateMyProfile = (
-  userId: number,
-  body: Pick<UserProfile, 'fullName' | 'phone' | 'dob' | 'gender'>,
-) =>
-  mock(() => {
-    const user = users.find((u) => u.id === userId)!;
-    Object.assign(user, body);
-    return user;
-  });
+export const updateMyProfile = async (body: Pick<UserProfile, 'fullName' | 'phone' | 'dob' | 'gender'>) =>
+  toProfile(
+    (
+      await apiClient.put<UserBody>('/api/users/me', {
+        fullName: body.fullName.trim(),
+        phone: body.phone?.trim() || '',
+        dob: body.dob || null,
+        gender: body.gender ? GENDER_TO_API[body.gender] : '',
+      })
+    ).data,
+  );

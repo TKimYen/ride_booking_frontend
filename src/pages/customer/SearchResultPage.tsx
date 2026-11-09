@@ -2,13 +2,12 @@ import dayjs from 'dayjs';
 import { ChevronLeft, ChevronRight, SlidersHorizontal, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { getCompanies } from '../../api/catalog.api';
+import { getAllLocations, getCompanies } from '../../api/catalog.api';
 import { getStopPointOptions, searchTrips, type TripSort } from '../../api/trips.api';
 import { Empty, ErrorBox, Skeleton } from '../../components/common';
 import SearchForm from '../../components/search/SearchForm';
 import TripCard from '../../components/trip/TripCard';
 import { useAsync, useDocumentTitle } from '../../hooks';
-import { locations } from '../../mock/db';
 import type { BusType, TripSearchItemResponse } from '../../types';
 import { BUS_TYPE_NAME, formatShortDate } from '../../utils/format';
 
@@ -31,8 +30,9 @@ export default function SearchResultPage() {
   const { route = '' } = useParams();
   const [params, setParams] = useSearchParams();
   const [originSlug, destSlug] = route.split('-di-');
-  const origin = locations.find((l) => l.slug === originSlug) ?? null;
-  const destination = locations.find((l) => l.slug === destSlug) ?? null;
+  const locations = useAsync(getAllLocations, []);
+  const origin = locations.data?.find((l) => l.slug === originSlug) ?? null;
+  const destination = locations.data?.find((l) => l.slug === destSlug) ?? null;
   const date = params.get('date') ?? dayjs().format('YYYY-MM-DD');
   const list = (k: string) => params.get(k)?.split(',').filter(Boolean) ?? [];
   const slot = params.get('slot') ?? '';
@@ -72,9 +72,16 @@ export default function SearchResultPage() {
     sort,
     size: 10 * pages,
   };
-  const result = useAsync(() => searchTrips(query), [JSON.stringify(query)]);
+  // Chưa đổi được slug sang id thì chưa gọi: gọi sớm sẽ ra mọi chuyến của mọi tuyến.
+  const result = useAsync(
+    () => (origin && destination ? searchTrips(query) : Promise.resolve(null)),
+    [JSON.stringify(query)],
+  );
   const companies = useAsync(() => getCompanies(), []);
-  const stopOptions = useAsync(() => getStopPointOptions(origin?.id, destination?.id, date), [origin?.id, destination?.id, date]);
+  const stopOptions = useAsync(
+    () => (origin && destination ? getStopPointOptions(origin.id, destination.id, date) : Promise.resolve(null)),
+    [origin?.id, destination?.id, date],
+  );
 
   // Dải 7 ngày quanh ngày đang chọn, không lùi về quá khứ.
   const days = useMemo(() => {
@@ -194,13 +201,17 @@ export default function SearchResultPage() {
               </div>
             </div>
 
-            {!origin || !destination ? (
+            {locations.loading ? (
+              <div className="space-y-3">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-44" />)}</div>
+            ) : locations.error ? (
+              <ErrorBox message={locations.error} onRetry={locations.reload} />
+            ) : !origin || !destination ? (
               <Empty title="Không nhận ra tuyến đường" hint="Hãy chọn lại nơi xuất phát và nơi đến ở ô tìm kiếm." />
             ) : result.error ? (
               <ErrorBox message={result.error} onRetry={result.reload} />
-            ) : result.loading && !result.data ? (
+            ) : !result.data ? (
               <div className="space-y-3">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-44" />)}</div>
-            ) : result.data!.content.length === 0 ? (
+            ) : result.data.content.length === 0 ? (
               <Empty
                 title="Không có chuyến phù hợp"
                 hint={filterCount ? 'Thử bỏ bớt bộ lọc.' : 'Thử chọn ngày khác trên dải ngày phía trên.'}

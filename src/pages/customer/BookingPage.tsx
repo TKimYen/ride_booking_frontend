@@ -45,7 +45,7 @@ export default function BookingPage() {
   // Tự điền thông tin liên hệ từ hồ sơ (đặt hộ thì sửa được).
   useEffect(() => {
     if (!user) return;
-    getMyProfile(user.id).then((p) => setContact({ name: p.fullName, phone: p.phone ?? '', email: p.email }));
+    getMyProfile().then((p) => setContact({ name: p.fullName, phone: p.phone ?? '', email: p.email }));
   }, [user]);
 
   // Mặc định điểm đón/trả đầu tiên.

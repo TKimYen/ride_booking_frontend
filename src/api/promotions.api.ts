@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import { promotions, seatsOf, trips } from '../mock/db';
 import type { PromotionResponse, PromotionValidateResponse } from '../types';
-import { ApiError, mock } from './client';
+import { ApiError, get, mock } from './client';
 
 export const isUsable = (p: PromotionResponse, now = dayjs()) =>
   p.active &&
@@ -38,20 +38,13 @@ export function applyPromotion(code: string, tripId: number, subtotal: number) {
 }
 
 /** GET /api/promotions?featured=true — Ưu đãi nổi bật ở Trang chủ. */
-export const getFeaturedPromotions = () => mock(() => promotions.filter((p) => p.featured && isUsable(p)));
+export const getFeaturedPromotions = () => get<PromotionResponse[]>('/api/promotions', { featured: true });
 
 /** GET /api/promotions — trang Ưu đãi. */
-export const getActivePromotions = () => mock(() => promotions.filter((p) => isUsable(p)));
+export const getActivePromotions = () => get<PromotionResponse[]>('/api/promotions');
 
-/** GET /api/promotions?tripId= — tab Giảm giá. */
-export const getPromotionsForTrip = (tripId: number) =>
-  mock(() => {
-    const trip = trips.find((t) => t.id === tripId)!;
-    return promotions.filter(
-      (p) =>
-        isUsable(p) && (p.companyId == null || p.companyId === trip.companyId) && (p.routeId == null || p.routeId === trip.routeId),
-    );
-  });
+/** GET /api/promotions?tripId= — tab Giảm giá. Server lọc theo nhà xe/tuyến của chuyến. */
+export const getPromotionsForTrip = (tripId: number) => get<PromotionResponse[]>('/api/promotions', { tripId });
 
 /** POST /api/promotions/validate {tripId, seatIds, code} */
 export const validatePromotion = (tripId: number, seatIds: number[], code: string) =>
