@@ -37,8 +37,8 @@ import type {
   UpcomingTripItem,
 } from '../types';
 import { BUS_TYPE_NAME, normalizeVN } from '../utils/format';
-import { expireStale, viewBooking } from './bookings.api';
 import { ApiError, mock, paginate } from './client';
+import {expireStale, viewBooking} from "./bookings.api.ts";
 
 // ============ Chuyến xe ============
 export interface AdminTripRow {
@@ -401,9 +401,11 @@ export const adminListBookings = (q: {
     return paginate(list, q.page ?? 0, q.size ?? 20);
   });
 
-/** Mới — POST /api/admin/bookings/{id}/cancel {reason} (việc 4.5) */
 export const adminCancelBooking = (id: number, reason: string) =>
   mock(() => {
+      if (!reason || !reason.trim()) {
+          throw new ApiError(400, 'Vui lòng nhập lý do hủy đơn');
+      }
     const b = bookings.find((x) => x.id === id);
     if (!b) throw new ApiError(404, `Không tìm thấy đơn đặt vé với id ${id}`);
     if (b.status !== 'PENDING' && b.status !== 'PAID') throw new ApiError(409, 'Đơn không thể huỷ ở trạng thái hiện tại');
@@ -417,7 +419,7 @@ export const adminCancelBooking = (id: number, reason: string) =>
     });
     const needRefund = b.status === 'PAID';
     b.status = 'CANCELLED';
-    b.cancelReason = reason.trim() || 'Admin huỷ';
+    b.cancelReason = reason.trim();
     return { ...viewBooking(b), needRefund };
   });
 
