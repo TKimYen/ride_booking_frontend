@@ -1,10 +1,7 @@
 import dayjs from 'dayjs';
 import { bookings, seatsOf } from '../mock/db';
 import type { BookingResponse, BookingStatus, HoldSeatsRequest, PageResponse } from '../types';
-import { ApiError, apiClient, mock, paginate } from './client';
-
-/** bookingId -> token gốc của khách vãng lai (backend chỉ lưu hash). */
-const guestTokens = new Map<number, string>();
+import { apiClient } from './client';
 
 /**
  * Đơn PENDING quá hạn coi như EXPIRED và trả ghế — backend làm việc này bằng BookingExpiryJob.
@@ -87,14 +84,11 @@ export const getBooking = (id: number, userId: number | null, guestToken?: strin
 
 /** GET /api/bookings?status=A,B — Đơn hàng của tôi */
 export const listMyBookings = (userId: number, statuses: BookingStatus[], page = 0, size = 10) =>
-  mock((): PageResponse<BookingResponse> => {
-    expireStale();
-    const list = bookings
-      .filter((b) => b.userId === userId && (!statuses.length || statuses.includes(b.status)))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .map(view);
-    return paginate(list, page, size);
-  });
+  (void userId, apiClient)
+    .get<PageResponse<BookingResponse>>('/api/bookings', {
+      params: { status: statuses.length ? statuses.join(',') : undefined, page, size },
+    })
+    .then((r) => ({ ...r.data, content: r.data.content.map(fixHold) }));
 
 /** POST /api/bookings/lookup {bookingCode, phone} — đơn khách vãng lai được cấp token mới. */
 export const lookupBooking = (bookingCode: string, phone: string) =>
@@ -104,16 +98,8 @@ export const lookupBooking = (bookingCode: string, phone: string) =>
 
 /** POST /api/bookings/claim {bookingCode, phone} — gắn vé khách vãng lai vào tài khoản. */
 export const claimBooking = (userId: number, bookingCode: string, phone: string) =>
-  mock((): BookingResponse => {
-    const b = bookings.find(
-      (x) => x.bookingCode === bookingCode.trim().toUpperCase() && x.contactPhone === phone.trim(),
-    );
-    if (!b) throw new ApiError(404, 'Không tìm thấy vé với mã và số điện thoại này');
-    if (!b.guest && b.userId !== userId) throw new ApiError(409, 'Vé này đã thuộc một tài khoản khác');
-    b.userId = userId;
-    b.guest = false;
-    guestTokens.delete(b.id);
-    return view(b);
-  });
+  (void userId, apiClient)
+    .post<BookingResponse>('/api/bookings/claim', { bookingCode: bookingCode.trim().toUpperCase(), phone: phone.trim() })
+    .then((r) => fixHold(r.data));
 
 export { expireStale, view as viewBooking };
