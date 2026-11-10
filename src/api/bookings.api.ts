@@ -1,15 +1,10 @@
 import dayjs from 'dayjs';
-import { bookings, createBookingRecord, fmt, seatsOf, trips } from '../mock/db';
+import { bookings, seatsOf } from '../mock/db';
 import type { BookingResponse, BookingStatus, HoldSeatsRequest, PageResponse } from '../types';
 import { ApiError, apiClient, mock, paginate } from './client';
-import { applyPromotion } from './promotions.api';
-
-const HOLD_MINUTES = 10;
-const MAX_SEATS = 10;
 
 /** bookingId -> token gốc của khách vãng lai (backend chỉ lưu hash). */
 const guestTokens = new Map<number, string>();
-const newToken = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), (b) => b.toString(16).padStart(2, '0')).join('');
 
 /**
  * Đơn PENDING quá hạn coi như EXPIRED và trả ghế — backend làm việc này bằng BookingExpiryJob.
@@ -40,66 +35,17 @@ function view(b: BookingResponse): BookingResponse {
 
 /**
  * POST /api/bookings — giữ ghế 10 phút, tạo đơn PENDING.
- * userId = null là khách vãng lai: bắt buộc email, trả guestToken đúng một lần.
+ * Đã đăng nhập: interceptor gắn Bearer token. Khách vãng lai: bắt buộc email,
+ * backend trả guestToken đúng một lần (trang đặt vé lưu lại để thanh toán/tra cứu).
  */
 export const holdSeats = (userId: number | null, req: HoldSeatsRequest) =>
-  mock((): BookingResponse => {
-    expireStale();
-    const trip = trips.find((t) => t.id === req.tripId);
-    if (!trip) throw new ApiError(404, `Không tìm thấy chuyến xe với id ${req.tripId}`);
-    if (trip.status !== 'ACTIVE') throw new ApiError(409, 'Chuyến xe này không còn nhận đặt vé');
-    if (!dayjs(trip.departureTime).isAfter(dayjs())) throw new ApiError(409, 'Chuyến xe đã khởi hành, không thể đặt vé');
-    if (userId == null && !req.contactEmail?.trim())
-      throw new ApiError(400, 'Khách chưa đăng nhập phải nhập email để nhận vé');
-    const ids = [...new Set(req.seatIds)].sort((a, b) => a - b);
-    if (!ids.length) throw new ApiError(400, 'Phải chọn ít nhất một ghế');
-    if (ids.length > MAX_SEATS) throw new ApiError(400, `Mỗi đơn chỉ được đặt tối đa ${MAX_SEATS} ghế`);
-
-    const all = seatsOf(trip.id);
-    const seats = ids.map((id) => all.find((s) => s.id === id));
-    if (seats.some((s) => !s)) throw new ApiError(404, 'Một hoặc nhiều ghế không tồn tại');
-    const now = dayjs();
-    const taken = seats.filter(
-      (s) => s!.status === 'BOOKED' || (s!.status === 'HOLDING' && (!s!.holdingUntil || dayjs(s!.holdingUntil).isAfter(now))),
-    );
-    if (taken.length) throw new ApiError(409, `Ghế đã có người giữ hoặc đã bán: ${taken.map((s) => s!.seatName).join(', ')}`);
-
-    const subtotal = seats.reduce((sum, s) => sum + s!.totalPrice, 0);
-    let discount = 0;
-    let promotionCode: string | null = null;
-    if (req.promotionCode?.trim()) {
-      const applied = applyPromotion(req.promotionCode, trip.id, subtotal);
-      discount = applied.discount;
-      promotionCode = applied.promotion.code;
-    }
-
-    const expiresAt = now.add(HOLD_MINUTES, 'minute');
-    seats.forEach((s) => {
-      s!.status = 'HOLDING';
-      s!.holdingUntil = fmt(expiresAt);
-    });
-    const booking = createBookingRecord({
-      trip,
-      seats: seats as NonNullable<(typeof seats)[number]>[],
-      userId,
-      contactName: req.contactName.trim(),
-      contactPhone: req.contactPhone.trim(),
-      contactEmail: req.contactEmail.trim(),
-      status: 'PENDING',
-      createdAt: now,
-      pickupPointId: req.pickupPointId,
-      dropoffPointId: req.dropoffPointId,
-      promotionCode,
-      discount,
-    });
-    booking.expiresAt = fmt(expiresAt);
-    if (userId == null) {
-      const token = newToken();
-      guestTokens.set(booking.id, token);
-      return { ...view(booking), guestToken: token };
-    }
-    return view(booking);
-  }, 500);
+  (void userId, apiClient)
+    .post<BookingResponse>('/api/bookings', {
+      ...req,
+      contactEmail: req.contactEmail?.trim() || undefined,
+      promotionCode: req.promotionCode?.trim() || undefined,
+    })
+    .then((r) => r.data);
 
 /** POST /api/bookings/{id}/pay — thanh toán demo (môi trường dev). */
 export const payDemo = (id: number, userId: number | null, guestToken?: string | null) =>
