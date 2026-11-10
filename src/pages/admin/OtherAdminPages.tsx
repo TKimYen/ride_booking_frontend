@@ -41,7 +41,6 @@ export function BookingsAdminPage() {
     keyword: params.get('keyword') || undefined,
     statuses: (params.get('status')?.split(',').filter(Boolean) ?? []) as BookingStatus[],
     tripId: params.get('tripId') ? Number(params.get('tripId')) : undefined,
-    guest: params.get('guest') == null ? undefined : params.get('guest') === 'true',
     from: params.get('from') || undefined,
     to: params.get('to') || undefined,
     page: Number(params.get('page') ?? 0),
@@ -54,9 +53,17 @@ export function BookingsAdminPage() {
 
   const doCancel = async () => {
     if (!cancelling) return;
+    if (!reason.trim()) {
+      message.warning('Vui lòng nhập lý do huỷ đơn');
+      return;
+    }
     try {
-      const r = await adminCancelBooking(cancelling.id, reason);
-      message.success(r.needRefund ? `Đã huỷ đơn ${r.bookingCode}. Đơn đã thanh toán — nhớ hoàn tiền ${formatVND(r.totalPrice)}.` : `Đã huỷ đơn ${r.bookingCode}`);
+      const { booking, refund } = await adminCancelBooking(cancelling.id, reason);
+      message.success(
+        refund
+          ? `Đã huỷ đơn ${booking.bookingCode}. Đơn đã thanh toán — cần hoàn ${formatVND(refund.amount)} qua ${refund.gateway}.`
+          : `Đã huỷ đơn ${booking.bookingCode}`,
+      );
       setCancelling(null);
       setDetail(null);
       setReason('');
@@ -79,7 +86,6 @@ export function BookingsAdminPage() {
           onChange={(v: string[]) => set({ status: v.join(',') })}
           options={(Object.keys(BOOKING_STATUS) as BookingStatus[]).map((s) => ({ value: s, label: BOOKING_STATUS[s].label }))}
         />
-        <Select allowClear placeholder="Loại khách" style={{ width: 140 }} value={q.guest == null ? undefined : String(q.guest)} onChange={(v) => set({ guest: v })} options={[{ value: 'true', label: 'Khách vãng lai' }, { value: 'false', label: 'Thành viên' }]} />
         <DatePicker.RangePicker format="DD/MM/YYYY" value={q.from && q.to ? [dayjs(q.from), dayjs(q.to)] : null} onChange={(v) => set({ from: v?.[0]?.format('YYYY-MM-DD'), to: v?.[1]?.format('YYYY-MM-DD') })} />
         {q.tripId && <Tag closable onClose={() => set({ tripId: null })}>Chuyến #{q.tripId}</Tag>}
       </Space>
@@ -126,6 +132,7 @@ export function BookingsAdminPage() {
                 {detail.payment ? `${detail.payment.gateway} · ${PAYMENT_STATUS[detail.payment.status]} · ${detail.payment.transactionNo} · ${formatDateTime(detail.payment.createdAt)}` : 'Chưa thanh toán'}
               </Descriptions.Item>
               <Descriptions.Item label="Đặt lúc">{formatDateTime(detail.createdAt)}</Descriptions.Item>
+              {detail.cancelledAt && <Descriptions.Item label="Huỷ lúc">{formatDateTime(detail.cancelledAt)}</Descriptions.Item>}
               {detail.cancelReason && <Descriptions.Item label="Lý do huỷ">{detail.cancelReason}</Descriptions.Item>}
             </Descriptions>
             <Space className="mt-4">
@@ -135,9 +142,9 @@ export function BookingsAdminPage() {
           </>
         )}
       </Drawer>
-      <Modal open={cancelling != null} title={`Huỷ đơn ${cancelling?.bookingCode}`} onCancel={() => setCancelling(null)} onOk={doCancel} okText="Huỷ đơn" okButtonProps={{ danger: true }}>
+      <Modal open={cancelling != null} title={`Huỷ đơn ${cancelling?.bookingCode}`} onCancel={() => setCancelling(null)} onOk={doCancel} okText="Huỷ đơn" okButtonProps={{ danger: true, disabled: !reason.trim() }}>
         {cancelling?.status === 'PAID' && <p className="text-danger">Đơn đã thanh toán {formatVND(cancelling.totalPrice)} — cần hoàn tiền cho khách sau khi huỷ.</p>}
-        <Input.TextArea rows={3} placeholder="Lý do huỷ (gửi cho khách)" value={reason} onChange={(e) => setReason(e.target.value)} />
+        <Input.TextArea rows={3} maxLength={255} showCount placeholder="Lý do huỷ (bắt buộc, lưu vào đơn)" value={reason} onChange={(e) => setReason(e.target.value)} />
       </Modal>
     </Card>
   );

@@ -141,7 +141,7 @@ export interface CompanyProfileResponse {
   images: { id: number; imageUrl: string; caption: string; sortOrder: number }[];
   amenities: { id: number; code: string; name: string; icon: string }[];
   policies: { id: number; policyType: PolicyType; title: string; content: string }[];
-  cancellationRules: { hoursBefore: number; refundPercent: number }[];
+  cancellationRules: { id?: number; hoursBefore: number; refundPercent: number }[];
 }
 
 export interface PromotionResponse {
@@ -232,7 +232,9 @@ export interface BookingResponse {
   guestToken?: string;
   /** Mới (BE việc 3.7) */
   reviewed?: boolean;
+  /** Lý do Admin nhập khi huỷ (BE việc 4.5); null nếu khách tự huỷ hoặc chưa huỷ */
   cancelReason?: string | null;
+  cancelledAt?: string | null;
 }
 
 export interface HoldSeatsRequest {
@@ -270,28 +272,36 @@ export interface UserProfile {
   locked?: boolean;
 }
 
-export interface DashboardSummary {
+/** GET /api/admin/stats/overview (BE việc 3.5) */
+export interface StatsOverview {
   from: string;
   to: string;
+  /** Tổng tiền đơn PAID + COMPLETED theo ngày thanh toán */
   revenue: number;
+  paidBookings: number;
   ticketsSold: number;
-  totalBookings: number;
-  bookingsByStatus: Record<BookingStatus, number>;
-  tripsDeparted: number;
-  occupancyRate: number;
-  pendingBookings: number;
+  /** Đơn tạo trong kỳ, mọi trạng thái */
+  newBookings: number;
+  /** Đơn bị huỷ trong kỳ (theo ngày huỷ) */
+  cancelledBookings: number;
+  /** Chuyến ACTIVE chưa khởi hành, tại thời điểm gọi */
+  upcomingTrips: number;
 }
 
 export interface DailyRevenuePoint {
   date: string;
   revenue: number;
-  ticketsSold: number;
+  bookings: number;
+  tickets: number;
 }
 
 export interface TopRouteItem {
   routeId: number;
   routeName: string;
-  ticketsSold: number;
+  originName: string;
+  destinationName: string;
+  bookings: number;
+  tickets: number;
   revenue: number;
 }
 

@@ -44,7 +44,7 @@ interface BusCompanyProfileBody {
   images: CompanyProfileResponse['images'];
   amenities: CompanyProfileResponse['amenities'];
   policies: { id: number; policyType: PolicyType; title: string; content: string }[];
-  cancellationRules: { hoursBefore: number; refundPercent: number }[];
+  cancellationRules: { id?: number; hoursBefore: number; refundPercent: number }[];
 }
 
 /** GET /api/bus-companies/{id}/profile — ảnh, tiện ích, chính sách, mốc hoàn tiền, điểm đánh giá. */

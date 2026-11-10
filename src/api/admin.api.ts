@@ -1,92 +1,79 @@
 /**
- * API khu Admin (dữ liệu cứng). Endpoint tương ứng ghi ở comment từng hàm;
- * "Mới" = backend chưa có, tên đã chốt ở HUONG_DAN_FRONTEND.md B10.
+ * API khu Admin. Chuyến xe, điểm dừng, danh mục, đơn hàng và thống kê đã nối API thật
+ * (booking-service qua gateway). Khuyến mãi và người dùng vẫn là dữ liệu cứng — ghi chú ở
+ * từng phần.
  */
 import dayjs from 'dayjs';
-import {
-  addTrip,
-  amenities,
-  bookings,
-  companies,
-  fmt,
-  layoutOf,
-  locations,
-  profiles,
-  promotions,
-  routes,
-  seatsOf,
-  slugify,
-  stopPoints,
-  trips,
-  users,
-} from '../mock/db';
+import { promotions, companies as mockCompanies, routes as mockRoutes, users } from '../mock/db';
 import type {
   BookingResponse,
   BookingStatus,
+  BusCompanyResponse,
   BusType,
   DailyRevenuePoint,
-  DashboardSummary,
+  LocationResponse,
   PageResponse,
   PointType,
   PolicyType,
   PromotionResponse,
   RouteResponse,
+  StatsOverview,
+  StopPointResponse,
   TopRouteItem,
   TripResponse,
+  TripSearchItemResponse,
   TripStatus,
   UpcomingTripItem,
 } from '../types';
-import { BUS_TYPE_NAME, normalizeVN } from '../utils/format';
-import { expireStale, viewBooking } from './bookings.api';
-import { ApiError, mock, paginate } from './client';
+import { normalizeVN } from '../utils/format';
+import { getCompanyProfile } from './catalog.api';
+import { ApiError, apiClient, get, mock, paginate } from './client';
+
+const post = <T>(url: string, body?: unknown) => apiClient.post<T>(url, body).then((r) => r.data);
+const put = <T>(url: string, body?: unknown) => apiClient.put<T>(url, body).then((r) => r.data);
+const del = (url: string) => apiClient.delete(url).then(() => ({ ok: true }));
 
 // ============ Chuyến xe ============
+/** Một dòng ở bảng chuyến. `taken` = ghế đã bán hoặc đang giữ (backend gộp hai loại). */
 export interface AdminTripRow {
   trip: TripResponse;
-  booked: number;
-  holding: number;
+  taken: number;
   total: number;
 }
 
-const tripRow = (t: TripResponse): AdminTripRow => {
-  const seats = seatsOf(t.id);
-  return {
-    trip: t,
-    booked: seats.filter((s) => s.status === 'BOOKED').length,
-    holding: seats.filter((s) => s.status === 'HOLDING').length,
-    total: seats.length,
-  };
-};
+export interface AdminTripDetail extends AdminTripRow {
+  /** Số đơn theo trạng thái; trạng thái không có đơn thì không có khoá. */
+  bookingsByStatus: Partial<Record<BookingStatus, number>>;
+}
 
-/** Mới — GET /api/admin/trips?status&routeId&companyId&from&to */
-export const adminListTrips = (q: {
+const tripRow = (item: TripSearchItemResponse): AdminTripRow => ({
+  trip: item.trip,
+  taken: item.unavailableSeats,
+  total: item.availableSeats + item.unavailableSeats,
+});
+
+/** GET /api/admin/trips?status&originId&destinationId&companyId&from&to — mới nhất trước. */
+export const adminListTrips = async (q: {
   status?: TripStatus;
-  routeId?: number;
+  originId?: number;
+  destinationId?: number;
   companyId?: number;
   from?: string;
   to?: string;
   page?: number;
   size?: number;
-}) =>
-  mock((): PageResponse<AdminTripRow> => {
-    let list = trips;
-    if (q.status) list = list.filter((t) => t.status === q.status);
-    if (q.routeId) list = list.filter((t) => t.routeId === q.routeId);
-    if (q.companyId) list = list.filter((t) => t.companyId === q.companyId);
-    if (q.from) list = list.filter((t) => t.departureTime.slice(0, 10) >= q.from!);
-    if (q.to) list = list.filter((t) => t.departureTime.slice(0, 10) <= q.to!);
-    list = [...list].sort((a, b) => b.departureTime.localeCompare(a.departureTime));
-    const p = paginate(list, q.page ?? 0, q.size ?? 20);
-    return { ...p, content: p.content.map(tripRow) };
-  });
+}): Promise<PageResponse<AdminTripRow>> => {
+  const p = await get<PageResponse<TripSearchItemResponse>>('/api/admin/trips', q);
+  return { ...p, content: p.content.map(tripRow) };
+};
 
-/** Mới — GET /api/admin/trips/{id} */
-export const adminGetTrip = (id: number) =>
-  mock(() => {
-    const t = trips.find((x) => x.id === id);
-    if (!t) throw new ApiError(404, `Không tìm thấy chuyến xe với id ${id}`);
-    return tripRow(t);
-  });
+/** GET /api/admin/trips/{id} — mọi trạng thái, kèm số ghế và số đơn theo trạng thái. */
+export const adminGetTrip = async (id: number): Promise<AdminTripDetail> => {
+  const d = await get<{ seats: TripSearchItemResponse; bookingsByStatus: AdminTripDetail['bookingsByStatus'] }>(
+    `/api/admin/trips/${id}`,
+  );
+  return { ...tripRow(d.seats), bookingsByStatus: d.bookingsByStatus };
+};
 
 export interface TripForm {
   routeId: number;
@@ -98,169 +85,61 @@ export interface TripForm {
 }
 
 /** POST /api/admin/trips — ghế sinh tự động theo loại xe. */
-export const adminCreateTrip = (form: TripForm) =>
-  mock(() => {
-    if (!dayjs(form.arrivalTime).isAfter(dayjs(form.departureTime)))
-      throw new ApiError(400, 'Giờ đến phải sau giờ khởi hành');
-    const route = routes.find((r) => r.id === form.routeId)!;
-    const t = addTrip(route, form.companyId, form.busType, dayjs(form.departureTime));
-    t.arrivalTime = fmt(dayjs(form.arrivalTime));
-    t.basePrice = form.basePrice;
-    t.status = 'ACTIVE';
-    return tripRow(t);
-  });
+export const adminCreateTrip = (form: TripForm) => post<TripResponse>('/api/admin/trips', form);
 
-/** PUT /api/admin/trips/{id} — không đổi được loại xe khi đã có ghế giữ/bán. */
-export const adminUpdateTrip = (id: number, form: TripForm) =>
-  mock(() => {
-    const t = trips.find((x) => x.id === id);
-    if (!t) throw new ApiError(404, `Không tìm thấy chuyến xe với id ${id}`);
-    if (!dayjs(form.arrivalTime).isAfter(dayjs(form.departureTime)))
-      throw new ApiError(400, 'Giờ đến phải sau giờ khởi hành');
-    const row = tripRow(t);
-    if (t.busType !== form.busType && row.booked + row.holding > 0)
-      throw new ApiError(409, `Chuyến đã bán ${row.booked} ghế, hãy huỷ chuyến thay vì xoá hoặc đổi loại xe`);
-    const route = routes.find((r) => r.id === form.routeId)!;
-    const company = companies.find((c) => c.id === form.companyId)!;
-    Object.assign(t, {
-      routeId: route.id,
-      routeName: route.name,
-      originId: route.originId,
-      originName: route.originName,
-      destinationId: route.destinationId,
-      destinationName: route.destinationName,
-      companyId: company.id,
-      companyName: company.name,
-      busType: form.busType,
-      busTypeName: BUS_TYPE_NAME[form.busType],
-      totalSeats: layoutOf(form.busType).length,
-      departureTime: fmt(dayjs(form.departureTime)),
-      arrivalTime: fmt(dayjs(form.arrivalTime)),
-      basePrice: form.basePrice,
-    });
-    seatsOf(t.id).forEach((s) => (s.totalPrice = t.basePrice + s.extraPrice));
-    return tripRow(t);
-  });
+/** PUT /api/admin/trips/{id} — backend chặn đổi loại xe khi đã có ghế giữ/bán (409). */
+export const adminUpdateTrip = (id: number, form: TripForm) => put<TripResponse>(`/api/admin/trips/${id}`, form);
 
-/** DELETE /api/admin/trips/{id} — từ chối nếu đã có ghế bán/giữ. */
-export const adminDeleteTrip = (id: number) =>
-  mock(() => {
-    const t = trips.find((x) => x.id === id);
-    if (!t) throw new ApiError(404, `Không tìm thấy chuyến xe với id ${id}`);
-    const row = tripRow(t);
-    if (row.booked > 0) throw new ApiError(409, `Chuyến đã bán ${row.booked} ghế, hãy huỷ chuyến thay vì xoá hoặc đổi loại xe`);
-    if (row.holding > 0) throw new ApiError(409, `Chuyến đang có ${row.holding} ghế được giữ, đợi hết giờ giữ rồi hãy làm tiếp`);
-    trips.splice(trips.indexOf(t), 1);
-    return { ok: true };
-  });
+/** DELETE /api/admin/trips/{id} — từ chối nếu chuyến đã có đơn (409). */
+export const adminDeleteTrip = (id: number) => del(`/api/admin/trips/${id}`);
 
-/** Mới — POST /api/admin/trips/{id}/cancel: trả ghế, huỷ đơn PENDING/PAID, trả DS đơn cần hoàn tiền. */
-export const adminCancelTrip = (id: number) =>
-  mock(() => {
-    const t = trips.find((x) => x.id === id);
-    if (!t) throw new ApiError(404, `Không tìm thấy chuyến xe với id ${id}`);
-    if (t.status === 'COMPLETED') throw new ApiError(409, 'Chuyến đã chạy xong, không thể huỷ');
-    let releasedSeats = 0;
-    seatsOf(id).forEach((s) => {
-      if (s.status !== 'AVAILABLE') {
-        s.status = 'AVAILABLE';
-        s.holdingUntil = null;
-        releasedSeats++;
-      }
-    });
-    const affected = bookings.filter((b) => b.trip.id === id && (b.status === 'PENDING' || b.status === 'PAID'));
-    const paidBookingIdsToRefund = affected.filter((b) => b.status === 'PAID').map((b) => b.id);
-    affected.forEach((b) => {
-      b.status = 'CANCELLED';
-      b.cancelReason = 'Nhà xe huỷ chuyến';
-    });
-    bookings.filter((b) => b.trip.id === id).forEach((b) => (b.trip.status = 'CANCELLED'));
-    t.status = 'CANCELLED';
-    return { tripId: id, cancelledBookings: affected.length, releasedSeats, paidBookingIdsToRefund };
-  });
+export interface RefundItem {
+  bookingId: number;
+  bookingCode: string;
+  contactName: string;
+  contactPhone: string;
+  contactEmail: string | null;
+  amount: number;
+  gateway: string;
+  transactionNo: string | null;
+}
 
-/** Mới — POST /api/admin/trips/{id}/complete: "Hoàn tất ngay" để demo. */
+export interface TripCancellationResult {
+  trip: TripResponse;
+  cancelledBookings: number;
+  releasedSeats: number;
+  /** Đơn đã thu tiền, cần hoàn. Hệ thống chưa tự hoàn tiền. */
+  refunds: RefundItem[];
+  totalRefundAmount: number;
+}
+
+/** POST /api/admin/trips/{id}/cancel — trả ghế, huỷ đơn PENDING/PAID, trả DS đơn cần hoàn tiền. */
+export const adminCancelTrip = (id: number) => post<TripCancellationResult>(`/api/admin/trips/${id}/cancel`);
+
+/** POST /api/admin/trips/{id}/complete — chỉ chuyến đã khởi hành; đơn PAID thành COMPLETED. */
 export const adminCompleteTrip = (id: number) =>
-  mock(() => {
-    const t = trips.find((x) => x.id === id);
-    if (!t) throw new ApiError(404, `Không tìm thấy chuyến xe với id ${id}`);
-    if (t.status !== 'ACTIVE') throw new ApiError(409, 'Chỉ hoàn tất được chuyến đang bán');
-    let completed = 0;
-    bookings
-      .filter((b) => b.trip.id === id)
-      .forEach((b) => {
-        if (b.status === 'PAID') {
-          b.status = 'COMPLETED';
-          completed++;
-        } else if (b.status === 'PENDING') b.status = 'EXPIRED';
-        b.trip.status = 'COMPLETED';
-      });
-    seatsOf(id).forEach((s) => {
-      if (s.status === 'HOLDING') {
-        s.status = 'AVAILABLE';
-        s.holdingUntil = null;
-      }
-    });
-    t.status = 'COMPLETED';
-    return { tripId: id, completedBookings: completed };
-  });
+  post<{ trip: TripResponse; completedBookings: number }>(`/api/admin/trips/${id}/complete`);
 
 // ============ Điểm đón/trả ============
-/** POST /api/admin/trips/{tripId}/stop-points */
+/** POST /api/admin/trips/{tripId}/stop-points — thứ tự tự đánh ở backend. */
 export const adminAddStopPoint = (
   tripId: number,
   body: { name: string; address: string; pointType: PointType; estimatedTime: string },
-) =>
-  mock(() => {
-    const t = trips.find((x) => x.id === tripId)!;
-    if (t.status === 'CANCELLED') throw new ApiError(409, 'Không thể thêm điểm dừng cho chuyến đã huỷ');
-    const order = Math.max(0, ...stopPoints.filter((s) => s.tripId === tripId && s.pointType === body.pointType).map((s) => s.stopOrder)) + 1;
-    const sp = {
-      id: Math.max(...stopPoints.map((s) => s.id)) + 1,
-      tripId,
-      ...body,
-      estimatedTime: fmt(dayjs(body.estimatedTime)),
-      stopOrder: order,
-    };
-    stopPoints.push(sp);
-    return sp;
-  });
+) => post<StopPointResponse>(`/api/admin/trips/${tripId}/stop-points`, body);
 
-/** DELETE /api/admin/trips/{tripId}/stop-points/{id} — đánh số lại các điểm cùng loại. */
-export const adminDeleteStopPoint = (tripId: number, id: number) =>
-  mock(() => {
-    const idx = stopPoints.findIndex((s) => s.id === id && s.tripId === tripId);
-    if (idx < 0) throw new ApiError(404, 'Không tìm thấy điểm dừng');
-    const [removed] = stopPoints.splice(idx, 1);
-    stopPoints
-      .filter((s) => s.tripId === tripId && s.pointType === removed.pointType)
-      .sort((a, b) => a.stopOrder - b.stopOrder)
-      .forEach((s, i) => (s.stopOrder = i + 1));
-    return { ok: true };
-  });
+/** DELETE /api/admin/trips/{tripId}/stop-points/{id} — backend đánh số lại các điểm cùng loại. */
+export const adminDeleteStopPoint = (tripId: number, id: number) => del(`/api/admin/trips/${tripId}/stop-points/${id}`);
 
 // ============ Danh mục ============
-/** POST/PUT/DELETE /api/admin/locations */
-export const adminSaveLocation = (id: number | null, name: string, slug?: string) =>
-  mock(() => {
-    const finalSlug = slug?.trim() || slugify(name);
-    if (locations.some((l) => l.slug === finalSlug && l.id !== id)) throw new ApiError(409, `Slug '${finalSlug}' đã tồn tại`);
-    if (id == null) {
-      const l = { id: Math.max(...locations.map((x) => x.id)) + 1, name: name.trim(), slug: finalSlug };
-      locations.push(l);
-      return l;
-    }
-    const l = locations.find((x) => x.id === id)!;
-    Object.assign(l, { name: name.trim(), slug: finalSlug });
-    return l;
-  });
-export const adminDeleteLocation = (id: number) =>
-  mock(() => {
-    if (routes.some((r) => r.originId === id || r.destinationId === id))
-      throw new ApiError(409, 'Địa điểm đang được dùng trong tuyến, không thể xoá');
-    locations.splice(locations.findIndex((l) => l.id === id), 1);
-    return { ok: true };
-  });
+/** GET /api/admin/locations — đủ mọi địa điểm (API công khai chỉ trả gợi ý theo từ khoá). */
+export const adminListLocations = () => get<LocationResponse[]>('/api/admin/locations');
+
+/** POST/PUT /api/admin/locations — bỏ trống slug thì backend tự sinh từ tên. */
+export const adminSaveLocation = (id: number | null, name: string, slug?: string) => {
+  const body = { name: name.trim(), slug: slug?.trim() || null };
+  return id == null ? post<LocationResponse>('/api/admin/locations', body) : put<LocationResponse>(`/api/admin/locations/${id}`, body);
+};
+export const adminDeleteLocation = (id: number) => del(`/api/admin/locations/${id}`);
 
 export interface RouteForm {
   originId: number;
@@ -268,164 +147,85 @@ export interface RouteForm {
   name: string;
   distanceKm: number;
   durationMinutes: number;
-  imageUrl?: string;
-  featured?: boolean;
 }
+/** GET /api/admin/routes */
+export const adminListRoutes = () => get<RouteResponse[]>('/api/admin/routes');
 /** POST/PUT /api/admin/routes */
-export const adminSaveRoute = (id: number | null, f: RouteForm) =>
-  mock((): RouteResponse => {
-    if (f.originId === f.destinationId) throw new ApiError(400, 'Điểm xuất phát và điểm đến không được là một');
-    if (routes.some((r) => r.name.toLowerCase() === f.name.trim().toLowerCase() && r.id !== id))
-      throw new ApiError(409, `Tuyến '${f.name.trim()}' đã tồn tại`);
-    const o = locations.find((l) => l.id === f.originId)!;
-    const d = locations.find((l) => l.id === f.destinationId)!;
-    const data = {
-      ...f,
-      name: f.name.trim(),
-      originName: o.name,
-      destinationName: d.name,
-    };
-    if (id == null) {
-      const r = { id: Math.max(...routes.map((x) => x.id)) + 1, ...data };
-      routes.push(r);
-      return r;
-    }
-    const r = routes.find((x) => x.id === id)!;
-    Object.assign(r, data);
-    return r;
-  });
-export const adminDeleteRoute = (id: number) =>
-  mock(() => {
-    if (trips.some((t) => t.routeId === id)) throw new ApiError(409, 'Tuyến đã có chuyến, không thể xoá');
-    routes.splice(routes.findIndex((r) => r.id === id), 1);
-    return { ok: true };
-  });
-
-/** POST/PUT /api/admin/bus-companies */
-export const adminSaveCompany = (id: number | null, f: { name: string; description: string; logoUrl: string }) =>
-  mock(() => {
-    if (companies.some((c) => c.name.toLowerCase() === f.name.trim().toLowerCase() && c.id !== id))
-      throw new ApiError(409, `Nhà xe '${f.name.trim()}' đã tồn tại`);
-    if (id == null) {
-      const c = { id: Math.max(...companies.map((x) => x.id)) + 1, ...f, name: f.name.trim() };
-      companies.push(c);
-      profiles.set(c.id, { images: [], amenities: [], policies: [], cancellationRules: [] });
-      return c;
-    }
-    const c = companies.find((x) => x.id === id)!;
-    Object.assign(c, { ...f, name: f.name.trim() });
-    return c;
-  });
-export const adminDeleteCompany = (id: number) =>
-  mock(() => {
-    if (trips.some((t) => t.companyId === id)) throw new ApiError(409, 'Nhà xe đã có chuyến, không thể xoá');
-    companies.splice(companies.findIndex((c) => c.id === id), 1);
-    return { ok: true };
-  });
-
-// ---- Nội dung nhà xe (Mới — BE việc 8.4) ----
-const profileOf = (companyId: number) => {
-  if (!profiles.has(companyId)) profiles.set(companyId, { images: [], amenities: [], policies: [], cancellationRules: [] });
-  return profiles.get(companyId)!;
+export const adminSaveRoute = (id: number | null, f: RouteForm) => {
+  const body = { ...f, name: f.name.trim() };
+  return id == null ? post<RouteResponse>('/api/admin/routes', body) : put<RouteResponse>(`/api/admin/routes/${id}`, body);
 };
-export const adminAddImage = (companyId: number, imageUrl: string, caption: string) =>
-  mock(() => {
-    const p = profileOf(companyId);
-    const img = { id: Date.now(), imageUrl, caption, sortOrder: p.images.length + 1 };
-    p.images.push(img);
-    return img;
-  });
-export const adminDeleteImage = (companyId: number, imageId: number) =>
-  mock(() => {
-    const p = profileOf(companyId);
-    p.images = p.images.filter((i) => i.id !== imageId).map((i, idx) => ({ ...i, sortOrder: idx + 1 }));
-    return { ok: true };
-  });
-export const adminSetAmenities = (companyId: number, amenityIds: number[]) =>
-  mock(() => {
-    profileOf(companyId).amenities = amenities.filter((a) => amenityIds.includes(a.id));
-    return { ok: true };
-  });
-export const adminSavePolicy = (companyId: number, id: number | null, f: { policyType: PolicyType; title: string; content: string }) =>
-  mock(() => {
-    const p = profileOf(companyId);
-    if (id == null) p.policies.push({ id: Date.now(), ...f });
-    else Object.assign(p.policies.find((x) => x.id === id)!, f);
-    return { ok: true };
-  });
-export const adminDeletePolicy = (companyId: number, id: number) =>
-  mock(() => {
-    const p = profileOf(companyId);
-    p.policies = p.policies.filter((x) => x.id !== id);
-    return { ok: true };
-  });
-export const adminSetCancellationRules = (companyId: number, rules: { hoursBefore: number; refundPercent: number }[]) =>
-  mock(() => {
-    if (rules.some((r) => r.refundPercent < 0 || r.refundPercent > 100)) throw new ApiError(400, '% hoàn tiền từ 0 đến 100');
-    if (new Set(rules.map((r) => r.hoursBefore)).size !== rules.length) throw new ApiError(400, 'Mốc giờ bị trùng');
-    profileOf(companyId).cancellationRules = [...rules].sort((a, b) => b.hoursBefore - a.hoursBefore);
-    return { ok: true };
-  });
+export const adminDeleteRoute = (id: number) => del(`/api/admin/routes/${id}`);
 
-// ============ Đơn hàng ============
-/** GET /api/admin/bookings?tripId&status&keyword&from&to (keyword/from/to: Mới — việc 4.5) */
+/** GET /api/admin/bus-companies */
+export const adminListCompanies = () => get<BusCompanyResponse[]>('/api/admin/bus-companies');
+/** POST/PUT /api/admin/bus-companies */
+export const adminSaveCompany = (id: number | null, f: { name: string; description: string; logoUrl: string }) => {
+  const body = { name: f.name.trim(), description: f.description || null, logoUrl: f.logoUrl || null };
+  return id == null
+    ? post<BusCompanyResponse>('/api/admin/bus-companies', body)
+    : put<BusCompanyResponse>(`/api/admin/bus-companies/${id}`, body);
+};
+export const adminDeleteCompany = (id: number) => del(`/api/admin/bus-companies/${id}`);
+
+// ---- Nội dung nhà xe [4.1] ----
+const companyUrl = (companyId: number) => `/api/admin/bus-companies/${companyId}`;
+
+export const adminAddImage = (companyId: number, imageUrl: string, caption: string) =>
+  post(`${companyUrl(companyId)}/images`, { imageUrl: imageUrl.trim(), caption: caption || null });
+export const adminDeleteImage = (companyId: number, imageId: number) => del(`${companyUrl(companyId)}/images/${imageId}`);
+
+/** PUT /api/admin/bus-companies/{id}/amenities — thay toàn bộ danh sách tiện ích. */
+export const adminSetAmenities = (companyId: number, amenityIds: number[]) =>
+  put(`${companyUrl(companyId)}/amenities`, { amenityIds });
+
+export const adminSavePolicy = (companyId: number, id: number | null, f: { policyType: PolicyType; title: string; content: string }) =>
+  id == null ? post(`${companyUrl(companyId)}/policies`, f) : put(`${companyUrl(companyId)}/policies/${id}`, f);
+export const adminDeletePolicy = (companyId: number, id: number) => del(`${companyUrl(companyId)}/policies/${id}`);
+
+/**
+ * Thay bảng mốc hoàn tiền. Backend chỉ có thêm/sửa/xoá từng mốc nên làm 3 bước: kiểm tra ở
+ * client, xoá mốc cũ, thêm mốc mới. Lỗi giữa chừng thì bảng có thể thiếu mốc — tải lại và lưu lần nữa.
+ */
+export const adminSetCancellationRules = async (companyId: number, rules: { hoursBefore: number; refundPercent: number }[]) => {
+  if (rules.some((r) => r.refundPercent < 0 || r.refundPercent > 100)) throw new ApiError(400, '% hoàn tiền từ 0 đến 100');
+  if (new Set(rules.map((r) => r.hoursBefore)).size !== rules.length) throw new ApiError(400, 'Mốc giờ bị trùng');
+  const current = await getCompanyProfile(companyId);
+  for (const r of current.cancellationRules) {
+    if (r.id != null) await del(`${companyUrl(companyId)}/cancellation-rules/${r.id}`);
+  }
+  for (const r of rules) await post(`${companyUrl(companyId)}/cancellation-rules`, r);
+  return { ok: true };
+};
+
+// ============ Đơn hàng [4.5] ============
+/** GET /api/admin/bookings?tripId&status&keyword&from&to — keyword khớp mã vé/tên/SĐT/email. */
 export const adminListBookings = (q: {
   tripId?: number;
   statuses?: BookingStatus[];
   keyword?: string;
   from?: string;
   to?: string;
-  guest?: boolean;
   page?: number;
   size?: number;
 }) =>
-  mock((): PageResponse<BookingResponse> => {
-    expireStale();
-    const k = q.keyword ? normalizeVN(q.keyword) : '';
-    const list = bookings
-      .filter(
-        (b) =>
-          (!q.tripId || b.trip.id === q.tripId) &&
-          (!q.statuses?.length || q.statuses.includes(b.status)) &&
-          (q.guest == null || b.guest === q.guest) &&
-          (!q.from || b.createdAt.slice(0, 10) >= q.from) &&
-          (!q.to || b.createdAt.slice(0, 10) <= q.to) &&
-          (!k ||
-            normalizeVN(b.bookingCode).includes(k) ||
-            b.contactPhone.includes(k) ||
-            normalizeVN(b.contactName).includes(k) ||
-            normalizeVN(b.contactEmail).includes(k)),
-      )
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .map(viewBooking);
-    return paginate(list, q.page ?? 0, q.size ?? 20);
+  get<PageResponse<BookingResponse>>('/api/admin/bookings', {
+    tripId: q.tripId,
+    status: q.statuses,
+    keyword: q.keyword?.trim(),
+    from: q.from,
+    to: q.to,
+    page: q.page,
+    size: q.size,
   });
 
-/** Mới — POST /api/admin/bookings/{id}/cancel {reason} (việc 4.5) */
+/** POST /api/admin/bookings/{id}/cancel {reason} — bắt buộc lý do; đơn đã thu tiền thì có `refund`. */
 export const adminCancelBooking = (id: number, reason: string) =>
-  mock(() => {
-    const b = bookings.find((x) => x.id === id);
-    if (!b) throw new ApiError(404, `Không tìm thấy đơn đặt vé với id ${id}`);
-    if (b.status !== 'PENDING' && b.status !== 'PAID') throw new ApiError(409, 'Đơn không thể huỷ ở trạng thái hiện tại');
-    const seats = seatsOf(b.trip.id);
-    b.seats.forEach((bs) => {
-      const s = seats.find((x) => x.id === bs.seatId);
-      if (s) {
-        s.status = 'AVAILABLE';
-        s.holdingUntil = null;
-      }
-    });
-    const needRefund = b.status === 'PAID';
-    b.status = 'CANCELLED';
-    b.cancelReason = reason.trim() || 'Admin huỷ';
-    return { ...viewBooking(b), needRefund };
-  });
+  post<{ booking: BookingResponse; refund: RefundItem | null }>(`/api/admin/bookings/${id}/cancel`, { reason: reason.trim() });
 
-// ============ Khuyến mãi ============
+// ============ Khuyến mãi (vẫn dữ liệu cứng — phần của Thái, BE đã có /api/admin/promotions) ============
 export type PromotionForm = Omit<PromotionResponse, 'id' | 'usedCount' | 'companyName' | 'routeName'>;
-/** Mới — GET /api/admin/promotions */
 export const adminListPromotions = () => mock(() => [...promotions].sort((a, b) => b.id - a.id));
-/** Mới — POST/PUT /api/admin/promotions */
 export const adminSavePromotion = (id: number | null, f: PromotionForm) =>
   mock(() => {
     const code = f.code.trim().toUpperCase();
@@ -436,8 +236,8 @@ export const adminSavePromotion = (id: number | null, f: PromotionForm) =>
     const data = {
       ...f,
       code,
-      companyName: f.companyId ? companies.find((c) => c.id === f.companyId)!.name : null,
-      routeName: f.routeId ? routes.find((r) => r.id === f.routeId)!.name : null,
+      companyName: f.companyId ? mockCompanies.find((c) => c.id === f.companyId)?.name ?? null : null,
+      routeName: f.routeId ? mockRoutes.find((r) => r.id === f.routeId)?.name ?? null : null,
     };
     if (id == null) {
       const p = { id: Math.max(0, ...promotions.map((x) => x.id)) + 1, usedCount: 0, ...data };
@@ -459,8 +259,8 @@ export const adminDeletePromotion = (id: number) =>
 // ============ Đánh giá ============
 // Đã nối API thật ở reviews.api.ts (BE việc 3.4); giữ tên cũ để trang admin không phải đổi import.
 export { adminListReviews, adminSetReviewHidden } from './reviews.api';
-// ============ Người dùng ============
-/** GET /api/admin/users?keyword (user-service) */
+
+// ============ Người dùng (vẫn dữ liệu cứng — user-service/auth-service) ============
 export const adminListUsers = (q: { keyword?: string; page?: number; size?: number }) =>
   mock(() => {
     const k = q.keyword ? normalizeVN(q.keyword) : '';
@@ -469,111 +269,55 @@ export const adminListUsers = (q: { keyword?: string; page?: number; size?: numb
     );
     return paginate(list, q.page ?? 0, q.size ?? 20);
   });
-/** PATCH /api/admin/users/{id}/unlock (auth-service) */
 export const adminUnlockUser = (id: number) =>
   mock(() => {
     users.find((u) => u.id === id)!.locked = false;
     return { ok: true };
   });
 
-// ============ Dashboard (Mới — /api/admin/stats/*) ============
-interface Range {
+// ============ Dashboard [3.5] — /api/admin/stats/* ============
+export interface StatsRange {
   from: string;
   to: string;
   companyId?: number;
 }
-const inRange = (iso: string, r: Range) => iso.slice(0, 10) >= r.from && iso.slice(0, 10) <= r.to;
-const ofCompany = (b: BookingResponse, r: Range) => !r.companyId || b.trip.companyId === r.companyId;
 
-function validateRange(r: Range) {
-  if (r.from > r.to) throw new ApiError(400, 'Ngày bắt đầu phải trước ngày kết thúc');
-  if (dayjs(r.to).diff(dayjs(r.from), 'day') > 366) throw new ApiError(400, 'Khoảng thời gian tối đa 366 ngày');
-}
+/** GET /api/admin/stats/overview — doanh thu, vé bán, đơn mới/huỷ, chuyến sắp chạy. */
+export const statsOverview = (r: StatsRange) => get<StatsOverview>('/api/admin/stats/overview', { ...r });
 
-/** GET /api/admin/stats/summary?from&to&companyId */
-export const statsSummary = (r: Range) =>
-  mock((): DashboardSummary => {
-    validateRange(r);
-    expireStale();
-    const paidLike = (b: BookingResponse) => b.status === 'PAID' || b.status === 'COMPLETED';
-    const revenue = bookings
-      .filter((b) => b.payment && b.payment.status === 'SUCCESS' && inRange(b.payment.createdAt, r) && ofCompany(b, r))
-      .reduce((s, b) => s + b.payment!.amount, 0);
-    const inPeriod = bookings.filter((b) => inRange(b.createdAt, r) && ofCompany(b, r));
-    const byStatus = { PENDING: 0, PAID: 0, CANCELLED: 0, COMPLETED: 0, EXPIRED: 0 } as Record<BookingStatus, number>;
-    inPeriod.forEach((b) => byStatus[b.status]++);
-    const departed = trips.filter(
-      (t) => t.status !== 'CANCELLED' && inRange(t.departureTime, r) && (!r.companyId || t.companyId === r.companyId),
-    );
-    let total = 0;
-    let booked = 0;
-    departed.forEach((t) => {
-      const seats = seatsOf(t.id);
-      total += seats.length;
-      booked += seats.filter((s) => s.status === 'BOOKED').length;
-    });
-    return {
-      from: r.from,
-      to: r.to,
-      revenue,
-      ticketsSold: inPeriod.filter(paidLike).reduce((s, b) => s + b.seats.length, 0),
-      totalBookings: inPeriod.length,
-      bookingsByStatus: byStatus,
-      tripsDeparted: departed.length,
-      occupancyRate: total ? booked / total : 0,
-      pendingBookings: bookings.filter((b) => b.status === 'PENDING' && ofCompany(b, r)).length,
-    };
-  }, 350);
+/** GET /api/admin/stats/revenue — đủ mọi ngày, ngày trống = 0. */
+export const statsRevenueDaily = (r: StatsRange) => get<DailyRevenuePoint[]>('/api/admin/stats/revenue', { ...r });
 
-/** GET /api/admin/stats/revenue-daily — điền 0 cho ngày trống để biểu đồ liền mạch. */
-export const statsRevenueDaily = (r: Range) =>
-  mock((): DailyRevenuePoint[] => {
-    validateRange(r);
-    const points: DailyRevenuePoint[] = [];
-    for (let d = dayjs(r.from); !d.isAfter(dayjs(r.to)); d = d.add(1, 'day')) {
-      const key = d.format('YYYY-MM-DD');
-      const paid = bookings.filter((b) => b.payment?.status === 'SUCCESS' && b.payment.createdAt.startsWith(key) && ofCompany(b, r));
-      points.push({
-        date: key,
-        revenue: paid.reduce((s, b) => s + b.payment!.amount, 0),
-        ticketsSold: paid.reduce((s, b) => s + b.seats.length, 0),
-      });
-    }
-    return points;
+/** GET /api/admin/stats/bookings-by-status — luôn đủ 5 trạng thái. */
+export const statsBookingsByStatus = (r: StatsRange) =>
+  get<{ status: BookingStatus; count: number }[]>('/api/admin/stats/bookings-by-status', { ...r });
+
+/** GET /api/admin/stats/top-routes — xếp theo doanh thu. */
+export const statsTopRoutes = (r: StatsRange, limit = 8) => get<TopRouteItem[]>('/api/admin/stats/top-routes', { ...r, limit });
+
+/**
+ * Chuyến ACTIVE khởi hành trong `hours` giờ tới. Không có API riêng: lấy từ danh sách chuyến
+ * của admin trong hai ngày rồi lọc theo giờ.
+ */
+export const statsUpcomingTrips = async (hours = 24, companyId?: number): Promise<UpcomingTripItem[]> => {
+  const now = dayjs();
+  const until = now.add(hours, 'hour');
+  const page = await adminListTrips({
+    status: 'ACTIVE',
+    companyId,
+    from: now.format('YYYY-MM-DD'),
+    to: until.format('YYYY-MM-DD'),
+    size: 100,
   });
-
-/** GET /api/admin/stats/top-routes?limit */
-export const statsTopRoutes = (r: Range, limit = 8) =>
-  mock((): TopRouteItem[] => {
-    const map = new Map<string, TopRouteItem>();
-    bookings
-      .filter((b) => (b.status === 'PAID' || b.status === 'COMPLETED') && inRange(b.createdAt, r) && ofCompany(b, r))
-      .forEach((b) => {
-        const routeId = trips.find((t) => t.id === b.trip.id)?.routeId ?? 0;
-        const item = map.get(b.trip.routeName) ?? { routeId, routeName: b.trip.routeName, ticketsSold: 0, revenue: 0 };
-        item.ticketsSold += b.seats.length;
-        item.revenue += b.totalPrice;
-        map.set(b.trip.routeName, item);
-      });
-    return [...map.values()].sort((a, b) => b.ticketsSold - a.ticketsSold).slice(0, limit);
-  });
-
-/** GET /api/admin/stats/upcoming-trips?hours=24 */
-export const statsUpcomingTrips = (hours = 24) =>
-  mock((): UpcomingTripItem[] => {
-    const now = dayjs();
-    return trips
-      .filter((t) => t.status === 'ACTIVE' && dayjs(t.departureTime).isAfter(now) && dayjs(t.departureTime).isBefore(now.add(hours, 'hour')))
-      .sort((a, b) => a.departureTime.localeCompare(b.departureTime))
-      .map((t) => {
-        const seats = seatsOf(t.id);
-        return {
-          tripId: t.id,
-          routeName: t.routeName,
-          companyName: t.companyName,
-          departureTime: t.departureTime,
-          booked: seats.filter((s) => s.status === 'BOOKED').length,
-          total: seats.length,
-        };
-      });
-  });
+  return page.content
+    .filter((r) => dayjs(r.trip.departureTime).isAfter(now) && dayjs(r.trip.departureTime).isBefore(until))
+    .sort((a, b) => a.trip.departureTime.localeCompare(b.trip.departureTime))
+    .map((r) => ({
+      tripId: r.trip.id,
+      routeName: r.trip.routeName,
+      companyName: r.trip.companyName,
+      departureTime: r.trip.departureTime,
+      booked: r.taken,
+      total: r.total,
+    }));
+};

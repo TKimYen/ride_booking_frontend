@@ -1,4 +1,4 @@
-import { App, Button, Card, Checkbox, Form, Image, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tabs, Tag } from 'antd';
+import { App, Button, Card, Checkbox, Form, Image, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tabs, Tag } from 'antd';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
@@ -8,6 +8,9 @@ import {
   adminDeleteLocation,
   adminDeletePolicy,
   adminDeleteRoute,
+  adminListCompanies,
+  adminListLocations,
+  adminListRoutes,
   adminSaveCompany,
   adminSaveLocation,
   adminSavePolicy,
@@ -16,7 +19,7 @@ import {
   adminSetCancellationRules,
   type RouteForm,
 } from '../../api/admin.api';
-import { getAmenities, getCompanies, getCompanyProfile, getLocations, getRoutes } from '../../api/catalog.api';
+import { getAmenities, getCompanyProfile } from '../../api/catalog.api';
 import { errorMessage } from '../../api/client';
 import { useAsync, useDocumentTitle } from '../../hooks';
 import type { BusCompanyResponse, LocationResponse, PolicyType, RouteResponse } from '../../types';
@@ -41,7 +44,7 @@ function useSave() {
 // ---------------- Địa điểm ----------------
 export function LocationsPage() {
   useDocumentTitle('Địa điểm');
-  const { data, loading, reload } = useAsync(() => getLocations(), []);
+  const { data, loading, reload } = useAsync(adminListLocations, []);
   const [editing, setEditing] = useState<LocationResponse | null | 'new'>(null);
   const [form] = Form.useForm<{ name: string; slug: string }>();
   const save = useSave();
@@ -96,8 +99,8 @@ export function LocationsPage() {
 // ---------------- Tuyến ----------------
 export function RoutesPage() {
   useDocumentTitle('Tuyến');
-  const routes = useAsync(getRoutes, []);
-  const locations = useAsync(() => getLocations(), []);
+  const routes = useAsync(adminListRoutes, []);
+  const locations = useAsync(adminListLocations, []);
   const [editing, setEditing] = useState<RouteResponse | null | 'new'>(null);
   const [form] = Form.useForm<RouteForm>();
   const save = useSave();
@@ -122,7 +125,6 @@ export function RoutesPage() {
           { title: 'Tên', dataIndex: 'name' },
           { title: 'Khoảng cách', dataIndex: 'distanceKm', render: (v) => `${v} km`, width: 120 },
           { title: 'Thời lượng', dataIndex: 'durationMinutes', render: formatDuration, width: 110 },
-          { title: 'Nổi bật', dataIndex: 'featured', render: (v) => (v ? <Tag color="gold">Trang chủ</Tag> : null), width: 110 },
           {
             title: '',
             width: 160,
@@ -165,8 +167,6 @@ export function RoutesPage() {
             <Form.Item name="distanceKm" label="Khoảng cách (km)" rules={[{ required: true }]}><InputNumber min={1} /></Form.Item>
             <Form.Item name="durationMinutes" label="Thời lượng (phút)" rules={[{ required: true }]}><InputNumber min={10} /></Form.Item>
           </Space>
-          <Form.Item name="imageUrl" label="Ảnh (URL)"><Input placeholder="https://..." /></Form.Item>
-          <Form.Item name="featured" label="Hiện ở Trang chủ" valuePropName="checked"><Switch /></Form.Item>
         </Form>
       </Modal>
     </Card>
@@ -176,7 +176,7 @@ export function RoutesPage() {
 // ---------------- Nhà xe ----------------
 export function CompaniesPage() {
   useDocumentTitle('Nhà xe');
-  const { data, loading, reload } = useAsync(() => getCompanies(), []);
+  const { data, loading, reload } = useAsync(adminListCompanies, []);
   const [editing, setEditing] = useState<BusCompanyResponse | null | 'new'>(null);
   const [form] = Form.useForm();
   const save = useSave();

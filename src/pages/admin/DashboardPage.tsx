@@ -1,4 +1,4 @@
-import { Card, Col, DatePicker, Progress, Row, Segmented, Select, Skeleton, Statistic, Table, Tag } from 'antd';
+import { Alert, Card, Col, DatePicker, Progress, Row, Segmented, Select, Skeleton, Statistic, Table, Tag } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -17,8 +17,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { statsRevenueDaily, statsSummary, statsTopRoutes, statsUpcomingTrips } from '../../api/admin.api';
-import { getCompanies } from '../../api/catalog.api';
+import { adminListCompanies, statsBookingsByStatus, statsOverview, statsRevenueDaily, statsTopRoutes, statsUpcomingTrips } from '../../api/admin.api';
 import { useAsync, useDocumentTitle } from '../../hooks';
 import type { BookingStatus } from '../../types';
 import { BOOKING_STATUS, formatTime, formatVND } from '../../utils/format';
@@ -45,12 +44,13 @@ export default function DashboardPage() {
   const days = to.diff(from, 'day') + 1;
   const prevRange = { from: from.subtract(days, 'day').format('YYYY-MM-DD'), to: from.subtract(1, 'day').format('YYYY-MM-DD'), companyId };
 
-  const summary = useAsync(() => statsSummary(range), [key]);
-  const prev = useAsync(() => statsSummary(prevRange), [key]);
+  const summary = useAsync(() => statsOverview(range), [key]);
+  const prev = useAsync(() => statsOverview(prevRange), [key]);
   const daily = useAsync(() => statsRevenueDaily(range), [key]);
+  const byStatus = useAsync(() => statsBookingsByStatus(range), [key]);
   const top = useAsync(() => statsTopRoutes(range, 8), [key]);
-  const upcoming = useAsync(() => statsUpcomingTrips(24), []);
-  const companies = useAsync(() => getCompanies(), []);
+  const upcoming = useAsync(() => statsUpcomingTrips(24, companyId), [companyId]);
+  const companies = useAsync(adminListCompanies, []);
 
   const s = summary.data;
   const p = prev.data;
@@ -59,7 +59,8 @@ export default function DashboardPage() {
     const pct = ((cur - old) / old) * 100;
     return <span className={pct >= 0 ? 'text-success' : 'text-danger'}>{pct >= 0 ? '▲' : '▼'} {Math.abs(pct).toFixed(1)}%</span>;
   };
-  const donut = s ? (Object.keys(s.bookingsByStatus) as BookingStatus[]).map((k) => ({ status: k, name: BOOKING_STATUS[k].label, value: s.bookingsByStatus[k] })).filter((d) => d.value > 0) : [];
+  const donut = (byStatus.data ?? []).map((d) => ({ status: d.status, name: BOOKING_STATUS[d.status].label, value: d.count })).filter((d) => d.value > 0);
+  const error = summary.error ?? daily.error ?? byStatus.error ?? top.error;
 
   return (
     <div className="space-y-4">
@@ -75,16 +76,17 @@ export default function DashboardPage() {
             { label: 'Tuỳ chọn', value: 'custom' },
           ]}
         />
-        {preset === 'custom' && <DatePicker.RangePicker value={custom} onChange={(v) => setCustom(v as [Dayjs, Dayjs])} format="DD/MM/YYYY" />}
+        {preset === 'custom' && <DatePicker.RangePicker value={custom} onChange={(v) => setCustom(v as [Dayjs, Dayjs] | null)} format="DD/MM/YYYY" />}
         <Select allowClear placeholder="Tất cả nhà xe" style={{ width: 200 }} value={companyId} onChange={setCompanyId} options={companies.data?.map((c) => ({ value: c.id, label: c.name }))} />
       </div>
+      {error && <Alert type="error" showIcon message="Không tải được số liệu" description={error} />}
 
       <Row gutter={[16, 16]}>
         {[
           { title: 'Doanh thu', value: s ? formatVND(s.revenue) : '', d: delta(s?.revenue, p?.revenue) },
-          { title: 'Vé bán', value: s?.ticketsSold, d: delta(s?.ticketsSold, p?.ticketsSold) },
-          { title: 'Tỷ lệ lấp đầy', value: s ? `${(s.occupancyRate * 100).toFixed(1)}%` : '', d: `${s?.tripsDeparted ?? 0} chuyến khởi hành` },
-          { title: 'Đơn chờ thanh toán', value: s?.pendingBookings, d: `${s?.totalBookings ?? 0} đơn trong kỳ` },
+          { title: 'Vé bán', value: s?.ticketsSold, d: delta(s?.ticketsSold, p?.ticketsSold) ?? `${s?.paidBookings ?? 0} đơn đã thanh toán` },
+          { title: 'Đơn mới', value: s?.newBookings, d: `${s?.cancelledBookings ?? 0} đơn bị huỷ trong kỳ` },
+          { title: 'Chuyến sắp chạy', value: s?.upcomingTrips, d: 'Chuyến đang mở bán, chưa khởi hành' },
         ].map((k) => (
           <Col key={k.title} xs={24} sm={12} xl={6}>
             <Card>
@@ -104,8 +106,7 @@ export default function DashboardPage() {
                 <XAxis dataKey="date" tickFormatter={(d) => dayjs(d).format('DD/MM')} fontSize={12} />
                 <YAxis tickFormatter={compactVND} fontSize={12} />
                 <Tooltip formatter={(v: number, n) => (n === 'Doanh thu' ? formatVND(v) : v)} labelFormatter={(d) => dayjs(d).format('DD/MM/YYYY')} />
-                <Line type="monotone" dataKey="revenue" name="Doanh thu" stroke="#2474E5" strokeWidth={2} dot={false} />
-              </LineChart>
+                <Line type="monotone" dataKey="revenue" name="Doanh thu" stroke="#2474E5" strokeWidth={2} dot={false} />              </LineChart>
             </ResponsiveContainer>
           </Card>
         </Col>
@@ -125,14 +126,14 @@ export default function DashboardPage() {
           </Card>
         </Col>
         <Col xs={24} xl={12}>
-          <Card title="Vé bán theo tuyến (top 8)">
+          <Card title="Tuyến bán chạy (top 8 theo doanh thu)">
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={top.data ?? []} layout="vertical" margin={{ left: 40 }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} />
                 <XAxis type="number" fontSize={12} />
                 <YAxis type="category" dataKey="routeName" width={150} fontSize={12} />
-                <Tooltip />
-                <Bar dataKey="ticketsSold" name="Vé bán" fill="#2474E5" radius={[0, 4, 4, 0]} />
+                <Tooltip formatter={(v: number, n) => (n === 'Doanh thu' ? formatVND(v) : v)} />
+                <Bar dataKey="tickets" name="Vé bán" fill="#2474E5" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </Card>

@@ -62,7 +62,7 @@ function TripFormDrawer({ open, row, onClose, onSaved }: { open: boolean; row: A
   const [form] = Form.useForm<FormValues>();
   const { routes, companies, busTypes } = useCatalog();
   const [saving, setSaving] = useState(false);
-  const locked = row != null && row.booked + row.holding > 0;
+  const locked = row != null && row.taken > 0;
 
   const suggestArrival = () => {
     const { routeId, departureTime } = form.getFieldsValue();
@@ -163,7 +163,7 @@ function useTripActions(onDone: () => void) {
     cancel: (row: AdminTripRow) =>
       modal.confirm({
         title: `Huỷ chuyến ${row.trip.routeName} ${formatTime(row.trip.departureTime)}?`,
-        content: `Trả lại ${row.booked + row.holding} ghế, huỷ mọi đơn chờ thanh toán và đã thanh toán. Không hoàn tác được.`,
+        content: `Trả lại ${row.taken} ghế đã bán/đang giữ, huỷ mọi đơn chờ thanh toán và đã thanh toán. Không hoàn tác được.`,
         okText: 'Huỷ chuyến',
         okButtonProps: { danger: true },
         cancelText: 'Đóng',
@@ -175,8 +175,19 @@ function useTripActions(onDone: () => void) {
               content: (
                 <div>
                   <p>Đã huỷ {r.cancelledBookings} đơn, trả {r.releasedSeats} ghế.</p>
-                  {r.paidBookingIdsToRefund.length > 0 ? (
-                    <p>Đơn cần hoàn tiền: <b>{r.paidBookingIdsToRefund.map((id) => `#${id}`).join(', ')}</b></p>
+                  {r.refunds.length > 0 ? (
+                    <>
+                      <p>
+                        Cần hoàn <b>{formatVND(r.totalRefundAmount)}</b> cho {r.refunds.length} đơn (hệ thống chưa tự hoàn tiền):
+                      </p>
+                      <ul className="pl-4">
+                        {r.refunds.map((f) => (
+                          <li key={f.bookingId}>
+                            <span className="font-mono">{f.bookingCode}</span> · {f.contactName} · {f.contactPhone} · {formatVND(f.amount)} ({f.gateway})
+                          </li>
+                        ))}
+                      </ul>
+                    </>
                   ) : (
                     <p>Không có đơn nào cần hoàn tiền.</p>
                   )}
@@ -199,7 +210,7 @@ function TripActions({ row, onEdit, actions }: { row: AdminTripRow; onEdit: () =
       <Button size="small" onClick={onEdit} disabled={!active}>Sửa</Button>
       {active && <Popconfirm title="Đánh dấu chuyến đã chạy xong?" onConfirm={() => actions.complete(row.trip.id)}><Button size="small">Hoàn tất ngay</Button></Popconfirm>}
       {active && <Button size="small" danger onClick={() => actions.cancel(row)}>Huỷ chuyến</Button>}
-      {row.booked + row.holding === 0 && (
+      {row.taken === 0 && (
         <Popconfirm title="Xoá chuyến này?" onConfirm={() => actions.remove(row.trip.id)}>
           <Button size="small" danger type="text">Xoá</Button>
         </Popconfirm>
@@ -214,7 +225,8 @@ export function TripsPage() {
   const { routes, companies } = useCatalog();
   const q = {
     status: (params.get('status') as TripStatus) || undefined,
-    routeId: params.get('routeId') ? Number(params.get('routeId')) : undefined,
+    originId: params.get('originId') ? Number(params.get('originId')) : undefined,
+    destinationId: params.get('destinationId') ? Number(params.get('destinationId')) : undefined,
     companyId: params.get('companyId') ? Number(params.get('companyId')) : undefined,
     from: params.get('from') || undefined,
     to: params.get('to') || undefined,
@@ -238,7 +250,20 @@ export function TripsPage() {
     >
       <Space wrap className="mb-4">
         <Select allowClear placeholder="Trạng thái" style={{ width: 140 }} value={q.status} onChange={(v) => set({ status: v })} options={(Object.keys(TRIP_STATUS) as TripStatus[]).map((s) => ({ value: s, label: TRIP_STATUS[s].label }))} />
-        <Select allowClear showSearch optionFilterProp="label" placeholder="Tuyến" style={{ width: 220 }} value={q.routeId} onChange={(v) => set({ routeId: v })} options={routes.map((r) => ({ value: r.id, label: r.name }))} />
+        {/* Backend lọc theo điểm đi/điểm đến; chọn tuyến = đặt cả hai. */}
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="Tuyến"
+          style={{ width: 220 }}
+          value={routes.find((r) => r.originId === q.originId && r.destinationId === q.destinationId)?.id}
+          onChange={(id) => {
+            const r = routes.find((x) => x.id === id);
+            set({ originId: r?.originId, destinationId: r?.destinationId });
+          }}
+          options={routes.map((r) => ({ value: r.id, label: r.name }))}
+        />
         <Select allowClear placeholder="Nhà xe" style={{ width: 180 }} value={q.companyId} onChange={(v) => set({ companyId: v })} options={companies.map((c) => ({ value: c.id, label: c.name }))} />
         <DatePicker.RangePicker
           format="DD/MM/YYYY"
@@ -260,12 +285,12 @@ export function TripsPage() {
           { title: 'Khởi hành', render: (_, r) => formatDateTime(r.trip.departureTime), width: 140 },
           { title: 'Giá', render: (_, r) => formatVND(r.trip.basePrice), width: 110 },
           {
-            title: 'Đã bán/Tổng',
+            title: 'Đã đặt/Tổng',
             width: 140,
             render: (_, r) => (
               <div>
-                <Progress percent={Math.round((r.booked / r.total) * 100)} size="small" showInfo={false} />
-                <span className="text-xs">{r.booked}/{r.total}{r.holding > 0 && ` · ${r.holding} đang giữ`}</span>
+                <Progress percent={r.total ? Math.round((r.taken / r.total) * 100) : 0} size="small" showInfo={false} />
+                <span className="text-xs">{r.taken}/{r.total}</span>
               </div>
             ),
           },
@@ -315,6 +340,9 @@ export function TripDetailAdminPage() {
   if (trip.error) return <Card>{trip.error} <Button onClick={() => navigate('/admin/chuyen-xe')}>Quay lại</Button></Card>;
   const row = trip.data!;
   const t = row.trip;
+  const seatList = seats.data?.seats ?? [];
+  const bookedSeats = seatList.filter((s) => s.status === 'BOOKED').length;
+  const holdingSeats = seatList.filter((s) => s.status === 'HOLDING').length;
   const owner = new Map<number, string>();
   passengers.data?.content.forEach((b) => b.seats.forEach((s) => owner.set(s.seatId, `${b.contactName} (${b.contactPhone})`)));
   const sortedPassengers = [...(passengers.data?.content ?? [])].sort((a, b) => (a.pickupPoint?.name ?? '').localeCompare(b.pickupPoint?.name ?? ''));
@@ -351,7 +379,7 @@ export function TripDetailAdminPage() {
                 <div><div className="text-muted">Giá cơ bản</div><b>{formatVND(t.basePrice)}</b></div>
                 <div><div className="text-muted">Khởi hành</div><b>{formatDateTime(t.departureTime)}</b></div>
                 <div><div className="text-muted">Đến</div><b>{formatDateTime(t.arrivalTime)}</b></div>
-                <div><div className="text-muted">Ghế</div><b>{row.booked} đã bán · {row.holding} đang giữ · {row.total} tổng</b></div>
+                <div><div className="text-muted">Ghế</div><b>{bookedSeats} đã bán · {holdingSeats} đang giữ · {row.total} tổng</b></div>
               </div>
             ),
           },
