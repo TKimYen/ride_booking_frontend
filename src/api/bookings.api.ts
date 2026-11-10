@@ -34,6 +34,16 @@ function view(b: BookingResponse): BookingResponse {
 }
 
 /**
+ * Backend trả expiresAt là giờ của server (UTC) và KHÔNG kèm múi giờ, nên trình duyệt
+ * ở Việt Nam (UTC+7) hiểu lệch 7 tiếng -> vừa vào trang thanh toán đã báo hết giờ.
+ * Tính lại expiresAt theo giờ máy từ holdSecondsRemaining (số giây còn lại do server tính).
+ */
+function fixHold(b: BookingResponse): BookingResponse {
+  if (b.holdSecondsRemaining == null) return b;
+  return { ...b, expiresAt: dayjs().add(b.holdSecondsRemaining, 'second').format('YYYY-MM-DDTHH:mm:ss') };
+}
+
+/**
  * POST /api/bookings — giữ ghế 10 phút, tạo đơn PENDING.
  * Đã đăng nhập: interceptor gắn Bearer token. Khách vãng lai: bắt buộc email,
  * backend trả guestToken đúng một lần (trang đặt vé lưu lại để thanh toán/tra cứu).
@@ -45,7 +55,7 @@ export const holdSeats = (userId: number | null, req: HoldSeatsRequest) =>
       contactEmail: req.contactEmail?.trim() || undefined,
       promotionCode: req.promotionCode?.trim() || undefined,
     })
-    .then((r) => r.data);
+    .then((r) => fixHold(r.data));
 
 /** POST /api/bookings/{id}/pay — thanh toán demo (môi trường dev). */
 export const payDemo = (id: number, userId: number | null, guestToken?: string | null) =>
@@ -54,7 +64,7 @@ export const payDemo = (id: number, userId: number | null, guestToken?: string |
       gateway: 'VNPAY',
       responseCode: '00',
     }, { guestToken: guestToken ?? undefined })
-    .then((r) => r.data);
+    .then((r) => fixHold(r.data));
 
 export const createStripeCheckoutSession = (id: number, guestToken?: string | null) =>
   apiClient
@@ -69,11 +79,11 @@ export const createStripeCheckoutSession = (id: number, guestToken?: string | nu
 export const cancelBooking = (id: number, userId: number | null, guestToken?: string | null) =>
   (void userId, apiClient)
     .post<BookingResponse>(`/api/bookings/${id}/cancel`, undefined, { guestToken: guestToken ?? undefined })
-    .then((r) => r.data);
+    .then((r) => fixHold(r.data));
 
 /** GET /api/bookings/{id} */
 export const getBooking = (id: number, userId: number | null, guestToken?: string | null, isAdmin = false) =>
-  (void userId, void isAdmin, apiClient.get<BookingResponse>(`/api/bookings/${id}`, { guestToken: guestToken ?? undefined })).then((r) => r.data);
+  (void userId, void isAdmin, apiClient.get<BookingResponse>(`/api/bookings/${id}`, { guestToken: guestToken ?? undefined })).then((r) => fixHold(r.data));
 
 /** GET /api/bookings?status=A,B — Đơn hàng của tôi */
 export const listMyBookings = (userId: number, statuses: BookingStatus[], page = 0, size = 10) =>
@@ -90,7 +100,7 @@ export const listMyBookings = (userId: number, statuses: BookingStatus[], page =
 export const lookupBooking = (bookingCode: string, phone: string) =>
   apiClient
     .post<BookingResponse>('/api/bookings/lookup', { bookingCode, phone })
-    .then((r) => r.data);
+    .then((r) => fixHold(r.data));
 
 /** POST /api/bookings/claim {bookingCode, phone} — gắn vé khách vãng lai vào tài khoản. */
 export const claimBooking = (userId: number, bookingCode: string, phone: string) =>
