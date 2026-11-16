@@ -316,7 +316,7 @@ export function UsersAdminPage() {
         rowKey="id"
         loading={loading}
         dataSource={data?.content}
-        scroll={{ x: 1000 }}
+        scroll={{ x: 900 }}
         pagination={{ current: q.page + 1, pageSize: 20, total: data?.totalElements, showSizeChanger: false, onChange: (p) => set({ page: p - 1 }) }}
         columns={[
           { title: 'ID', dataIndex: 'id', width: 60 },
@@ -324,19 +324,40 @@ export function UsersAdminPage() {
           { title: 'Email', dataIndex: 'email' },
           { title: 'SĐT', dataIndex: 'phone', width: 120 },
           { title: 'Vai trò', dataIndex: 'role', render: (v) => <Tag color={v === 'ADMIN' ? 'purple' : 'default'}>{v}</Tag>, width: 90 },
-          { title: 'Xác minh email', dataIndex: 'emailVerified', render: (v) => (v ? <Tag color="green">Đã xác minh</Tag> : <Tag>Chưa</Tag>), width: 130 },
-          { title: 'Đăng nhập cuối', dataIndex: 'lastLoginAt', render: formatDateTime, width: 140 },
-          { title: 'Số đơn', dataIndex: 'bookingCount', width: 80 },
+          { title: 'Ngày tạo', dataIndex: 'createdAt', render: formatDateTime, width: 140 },
           {
             title: '',
             width: 110,
-            render: (_, u) =>
-              u.locked ? (
-                <Button size="small" onClick={() => adminUnlockUser(u.id).then(() => (message.success('Đã gỡ khoá đăng nhập'), reload()))}>Gỡ khoá</Button>
-              ) : null,
+            render: (_, u) => (
+              <Popconfirm
+                title="Gỡ khoá đăng nhập?"
+                description="Xoá số lần đăng nhập sai của tài khoản này."
+                onConfirm={() =>
+                  adminUnlockUser(u.id)
+                    .then(() => (message.success('Đã gỡ khoá đăng nhập'), reload()))
+                    .catch((e) => message.error(errorMessage(e)))
+                }
+              >
+                <Button size="small">Gỡ khoá</Button>
+              </Popconfirm>
+            ),
           },
         ]}
       />
+    </Card>
+  );
+}
+
+// ---------------- Hoàn tiền (sau cờ VITE_FEATURE_ADMIN_REFUNDS) ----------------
+/**
+ * Khung trang — Ngày 3 nối GET /api/admin/refunds?status=DEAD và nút "Thử lại"
+ * (POST /api/admin/refunds/{id}/retry) khi API của Quang xong. Cờ mặc định tắt nên bản deploy không thấy trang này.
+ */
+export function RefundsAdminPage() {
+  useDocumentTitle('Hoàn tiền');
+  return (
+    <Card title="Hoàn tiền lỗi">
+      <p className="m-0 text-sm text-muted">Đang chờ API hàng đợi hoàn tiền (/api/admin/refunds).</p>
     </Card>
   );
 }

@@ -22,6 +22,7 @@ import ResultPage from '../pages/customer/ResultPage';
 import SearchResultPage from '../pages/customer/SearchResultPage';
 import TripDetailPage from '../pages/customer/TripDetailPage';
 import { Spinner } from '../components/common';
+import { FEATURES, type FeatureName } from '../config/features';
 import { useAuthStore } from '../stores/authStore';
 
 // Khu admin (Ant Design + Recharts) tách bundle riêng: khách hàng không phải tải.
@@ -51,6 +52,12 @@ function RequireAdmin() {
   const location = useLocation();
   if (!user) return <Navigate to={`/dang-nhap?redirect=${encodeURIComponent(location.pathname)}`} replace />;
   if (user.role !== 'ADMIN') return <ErrorPage code={403} />;
+  return <Outlet />;
+}
+
+/** Cờ tắt -> về `fallback` (mặc định trang chủ) thay vì 404. Xem config/features.ts. */
+function RequireFeature({ feature, fallback = '/' }: { feature: FeatureName; fallback?: string }) {
+  if (!FEATURES[feature]) return <Navigate to={fallback} replace />;
   return <Outlet />;
 }
 
@@ -127,6 +134,10 @@ export const router = createBrowserRouter([
           { path: 'khuyen-mai', element: lazyPage(other, 'PromotionsAdminPage') },
           { path: 'danh-gia', element: lazyPage(other, 'ReviewsAdminPage') },
           { path: 'nguoi-dung', element: lazyPage(other, 'UsersAdminPage') },
+          {
+            element: <RequireFeature feature="adminRefunds" fallback="/admin" />,
+            children: [{ path: 'hoan-tien', element: lazyPage(other, 'RefundsAdminPage') }],
+          },
         ],
       },
     ],

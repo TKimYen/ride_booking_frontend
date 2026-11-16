@@ -1,34 +1,6 @@
 import dayjs from 'dayjs';
-import { bookings, seatsOf } from '../mock/db';
 import type { BookingResponse, BookingStatus, HoldSeatsRequest, PageResponse } from '../types';
 import { apiClient } from './client';
-
-/**
- * Đơn PENDING quá hạn coi như EXPIRED và trả ghế — backend làm việc này bằng BookingExpiryJob.
- * Gọi trước mỗi lần đọc để dữ liệu cứng hành xử giống thật.
- */
-function expireStale() {
-  const now = dayjs();
-  for (const b of bookings) {
-    if (b.status === 'PENDING' && b.expiresAt && !dayjs(b.expiresAt).isAfter(now)) {
-      b.status = 'EXPIRED';
-      const seats = seatsOf(b.trip.id);
-      b.seats.forEach((bs) => {
-        const seat = seats.find((s) => s.id === bs.seatId);
-        if (seat && seat.status === 'HOLDING') {
-          seat.status = 'AVAILABLE';
-          seat.holdingUntil = null;
-        }
-      });
-    }
-  }
-}
-
-function view(b: BookingResponse): BookingResponse {
-  const holdSecondsRemaining =
-    b.status === 'PENDING' && b.expiresAt ? Math.max(0, dayjs(b.expiresAt).diff(dayjs(), 'second')) : null;
-  return { ...b, holdSecondsRemaining };
-}
 
 /**
  * Backend trả expiresAt là giờ của server (UTC) và KHÔNG kèm múi giờ, nên trình duyệt
@@ -101,5 +73,3 @@ export const claimBooking = (userId: number, bookingCode: string, phone: string)
   (void userId, apiClient)
     .post<BookingResponse>('/api/bookings/claim', { bookingCode: bookingCode.trim().toUpperCase(), phone: phone.trim() })
     .then((r) => fixHold(r.data));
-
-export { expireStale, view as viewBooking };

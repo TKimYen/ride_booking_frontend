@@ -1,10 +1,8 @@
 /**
- * API khu Admin. Chuyến xe, điểm dừng, danh mục, đơn hàng và thống kê đã nối API thật
- * (booking-service qua gateway). Khuyến mãi và người dùng vẫn là dữ liệu cứng — ghi chú ở
- * từng phần.
+ * API khu Admin — tất cả đã nối API thật qua gateway: chuyến xe, điểm dừng, danh mục, đơn hàng,
+ * khuyến mãi, thống kê (booking-service) và người dùng (user-service + auth-service).
  */
 import dayjs from 'dayjs';
-import { promotions, companies as mockCompanies, routes as mockRoutes, users } from '../mock/db';
 import type {
   BookingResponse,
   BookingStatus,
@@ -24,10 +22,10 @@ import type {
   TripSearchItemResponse,
   TripStatus,
   UpcomingTripItem,
+  UserProfile,
 } from '../types';
-import { normalizeVN } from '../utils/format';
 import { getCompanyProfile } from './catalog.api';
-import { ApiError, apiClient, get, mock, paginate } from './client';
+import { ApiError, apiClient, get } from './client';
 
 const post = <T>(url: string, body?: unknown) => apiClient.post<T>(url, body).then((r) => r.data);
 const put = <T>(url: string, body?: unknown) => apiClient.put<T>(url, body).then((r) => r.data);
@@ -223,57 +221,43 @@ export const adminListBookings = (q: {
 export const adminCancelBooking = (id: number, reason: string) =>
   post<{ booking: BookingResponse; refund: RefundItem | null }>(`/api/admin/bookings/${id}/cancel`, { reason: reason.trim() });
 
-// ============ Khuyến mãi (vẫn dữ liệu cứng — phần của Thái, BE đã có /api/admin/promotions) ============
+// ============ Khuyến mãi — /api/admin/promotions (booking-service) ============
 export type PromotionForm = Omit<PromotionResponse, 'id' | 'usedCount' | 'companyName' | 'routeName'>;
-export const adminListPromotions = () => mock(() => [...promotions].sort((a, b) => b.id - a.id));
-export const adminSavePromotion = (id: number | null, f: PromotionForm) =>
-  mock(() => {
-    const code = f.code.trim().toUpperCase();
-    if (promotions.some((p) => p.code === code && p.id !== id)) throw new ApiError(409, `Mã '${code}' đã tồn tại`);
-    if (!dayjs(f.endsAt).isAfter(dayjs(f.startsAt))) throw new ApiError(400, 'Thời gian kết thúc phải sau bắt đầu');
-    if (f.discountType === 'PERCENT' && (f.discountValue <= 0 || f.discountValue > 100))
-      throw new ApiError(400, 'Giảm theo % phải từ 1 đến 100');
-    const data = {
-      ...f,
-      code,
-      companyName: f.companyId ? mockCompanies.find((c) => c.id === f.companyId)?.name ?? null : null,
-      routeName: f.routeId ? mockRoutes.find((r) => r.id === f.routeId)?.name ?? null : null,
-    };
-    if (id == null) {
-      const p = { id: Math.max(0, ...promotions.map((x) => x.id)) + 1, usedCount: 0, ...data };
-      promotions.push(p);
-      return p;
-    }
-    const p = promotions.find((x) => x.id === id)!;
-    Object.assign(p, data);
-    return p;
-  });
-export const adminDeletePromotion = (id: number) =>
-  mock(() => {
-    const p = promotions.find((x) => x.id === id)!;
-    if (p.usedCount > 0) throw new ApiError(409, 'Mã đã được dùng, hãy tắt thay vì xoá');
-    promotions.splice(promotions.indexOf(p), 1);
-    return { ok: true };
-  });
+
+/** GET /api/admin/promotions — mới nhất trước. */
+export const adminListPromotions = () => get<PromotionResponse[]>('/api/admin/promotions');
+
+/** POST/PUT /api/admin/promotions — backend chặn trùng mã (409) và ngày sai (400). */
+export const adminSavePromotion = (id: number | null, f: PromotionForm) => {
+  if (!dayjs(f.endsAt).isAfter(dayjs(f.startsAt))) return Promise.reject(new ApiError(400, 'Thời gian kết thúc phải sau bắt đầu'));
+  const body = {
+    ...f,
+    code: f.code.trim().toUpperCase(),
+    description: f.description || null,
+    bannerUrl: f.bannerUrl || null,
+  };
+  return id == null
+    ? post<PromotionResponse>('/api/admin/promotions', body)
+    : put<PromotionResponse>(`/api/admin/promotions/${id}`, body);
+};
+
+/** DELETE /api/admin/promotions/{id} — mã đã có lượt dùng thì backend từ chối (409), hãy tắt thay vì xoá. */
+export const adminDeletePromotion = (id: number) => del(`/api/admin/promotions/${id}`);
 
 // ============ Đánh giá ============
 // Đã nối API thật ở reviews.api.ts (BE việc 3.4); giữ tên cũ để trang admin không phải đổi import.
 export { adminListReviews, adminSetReviewHidden } from './reviews.api';
 
-// ============ Người dùng (vẫn dữ liệu cứng — user-service/auth-service) ============
+// ============ Người dùng ============
+/** GET /api/admin/users?keyword&page&size (user-service) — tìm theo tên/email/SĐT, mới nhất trước. */
 export const adminListUsers = (q: { keyword?: string; page?: number; size?: number }) =>
-  mock(() => {
-    const k = q.keyword ? normalizeVN(q.keyword) : '';
-    const list = users.filter(
-      (u) => !k || normalizeVN(u.fullName).includes(k) || u.email.includes(k) || (u.phone ?? '').includes(k),
-    );
-    return paginate(list, q.page ?? 0, q.size ?? 20);
-  });
-export const adminUnlockUser = (id: number) =>
-  mock(() => {
-    users.find((u) => u.id === id)!.locked = false;
-    return { ok: true };
-  });
+  get<PageResponse<UserProfile>>('/api/admin/users', { keyword: q.keyword?.trim(), page: q.page, size: q.size ?? 20 });
+
+/**
+ * PATCH /api/admin/users/{id}/unlock (auth-service) — xoá bộ đếm đăng nhập sai. Backend không trả
+ * cờ "đang bị khoá" nên nút hiện ở mọi tài khoản; gọi khi tài khoản không bị khoá cũng không sao.
+ */
+export const adminUnlockUser = (id: number) => apiClient.patch<UserProfile>(`/api/admin/users/${id}/unlock`).then((r) => r.data);
 
 // ============ Dashboard [3.5] — /api/admin/stats/* ============
 export interface StatsRange {

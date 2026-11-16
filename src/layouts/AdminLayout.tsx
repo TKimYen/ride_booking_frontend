@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   LogOut,
   MapPin,
+  RotateCcw,
   Route as RouteIcon,
   Star,
   Tag,
@@ -14,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { FEATURES } from '../config/features';
 import { useAuthStore } from '../stores/authStore';
 
 const ITEMS = [
@@ -26,6 +28,8 @@ const ITEMS = [
   { key: '/admin/khuyen-mai', icon: <Tag size={16} />, label: 'Khuyến mãi' },
   { key: '/admin/danh-gia', icon: <Star size={16} />, label: 'Đánh giá' },
   { key: '/admin/nguoi-dung', icon: <Users size={16} />, label: 'Người dùng' },
+  // Cờ VITE_FEATURE_ADMIN_REFUNDS tắt thì không có mục này (route cũng chuyển về /admin).
+  ...(FEATURES.adminRefunds ? [{ key: '/admin/hoan-tien', icon: <RotateCcw size={16} />, label: 'Hoàn tiền' }] : []),
 ];
 
 export default function AdminLayout() {

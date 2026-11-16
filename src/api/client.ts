@@ -1,6 +1,6 @@
 /**
- * Shared HTTP client for backend APIs. Mock helpers remain available while
- * individual API modules are migrated from the demo data.
+ * HTTP client dùng chung cho mọi API: gắn Bearer token / X-Guest-Token, tự làm mới JWT khi 401
+ * (nhiều request cùng 401 chỉ gọi /api/auth/refresh một lần).
  */
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '../stores/authStore';
@@ -144,35 +144,6 @@ apiClient.interceptors.response.use(
     return Promise.reject(toApiError(error));
   },
 );
-
-const LATENCY_MS = 250;
-
-export function mock<T>(fn: () => T, latency = LATENCY_MS): Promise<T> {
-  return new Promise((resolve, reject) => {
-    setTimeout(() => {
-      try {
-        // structuredClone: trang sửa object nhận được không làm hỏng "database".
-        resolve(structuredClone(fn()));
-      } catch (e) {
-        reject(e);
-      }
-    }, latency);
-  });
-}
-
-export function paginate<T>(items: T[], page = 0, size = 10) {
-  const safeSize = Math.min(Math.max(size, 1), 100);
-  const totalPages = Math.max(1, Math.ceil(items.length / safeSize));
-  const content = items.slice(page * safeSize, page * safeSize + safeSize);
-  return {
-    content,
-    page,
-    size: safeSize,
-    totalElements: items.length,
-    totalPages,
-    hasNext: (page + 1) * safeSize < items.length,
-  };
-}
 
 export const errorMessage = (e: unknown) =>
   e instanceof ApiError ? e.message : 'Lỗi hệ thống, vui lòng thử lại';

@@ -265,11 +265,6 @@ export interface UserProfile {
   gender: 'MALE' | 'FEMALE' | 'OTHER' | null;
   role: Role;
   createdAt: string;
-  /** Chỉ có ở trang admin (dữ liệu cứng) */
-  emailVerified?: boolean;
-  lastLoginAt?: string | null;
-  bookingCount?: number;
-  locked?: boolean;
 }
 
 /** GET /api/admin/stats/overview (BE việc 3.5) */

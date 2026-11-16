@@ -1,4 +1,4 @@
-import { CreditCard, FlaskConical, Lock, Wallet } from 'lucide-react';
+import { CreditCard, FlaskConical, Lock } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useBlocker, useNavigate, useParams } from 'react-router-dom';
 import { cancelBooking, createStripeCheckoutSession, getBooking, payDemo } from '../../api/bookings.api';
@@ -11,6 +11,9 @@ import { useBookingStore } from '../../stores/bookingStore';
 import { formatDate, formatTime, formatVND } from '../../utils/format';
 
 type Method = 'STRIPE' | 'DEMO';
+
+/** Nút thanh toán demo (không qua cổng) chỉ có khi chạy `npm run dev`; bản build deploy chỉ còn Stripe. */
+const DEMO_PAYMENT_ENABLED = import.meta.env.DEV;
 
 /** /dat-ve/thanh-toan/:bookingId — bước 4: đếm ngược theo expiresAt, chặn rời trang khi chưa thanh toán. */
 export default function PaymentPage() {
@@ -52,7 +55,7 @@ export default function PaymentPage() {
   const pay = async () => {
     setPaying(true);
     try {
-      if (method === 'STRIPE') {
+      if (method === 'STRIPE' || !DEMO_PAYMENT_ENABLED) {
         const session = await createStripeCheckoutSession(bookingId, guestToken);
         window.location.assign(session.checkoutUrl);
       } else {
@@ -99,10 +102,9 @@ export default function PaymentPage() {
           <h2 className="mb-3 mt-0 text-base font-semibold">Chọn phương thức thanh toán</h2>
           <div className="space-y-2">
             <MethodOption checked={method === 'STRIPE'} onClick={() => setMethod('STRIPE')} icon={<CreditCard className="text-primary" />} title="Thẻ quốc tế (Visa, Master, JCB)" sub="Thanh toán qua cổng Stripe" />
-            <MethodOption checked={method === 'DEMO'} onClick={() => setMethod('DEMO')} icon={<FlaskConical className="text-amber-600" />} title="Thanh toán demo" sub="Chỉ dùng cho môi trường phát triển" />
-            {['VNPAY', 'MoMo', 'ZaloPay'].map((n) => (
-              <MethodOption key={n} disabled icon={<Wallet className="text-muted" />} title={n} sub="Sắp ra mắt" />
-            ))}
+            {DEMO_PAYMENT_ENABLED && (
+              <MethodOption checked={method === 'DEMO'} onClick={() => setMethod('DEMO')} icon={<FlaskConical className="text-amber-600" />} title="Thanh toán demo" sub="Chỉ hiện ở môi trường dev" />
+            )}
           </div>
           <p className="mb-0 mt-4 flex items-center gap-1 text-xs text-muted">
             <Lock size={12} /> Ghế được giữ tới hết thời gian đếm ngược. Mã vé: <b>{b.bookingCode}</b>
