@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   adminCancelBooking,
+  adminCreateUser,
   adminDeletePromotion,
   adminListBookings,
   adminListPromotions,
@@ -16,7 +17,7 @@ import {
 } from '../../api/admin.api';
 import { getCompanies, getRoutes } from '../../api/catalog.api';
 import { errorMessage } from '../../api/client';
-import { isUsable } from '../../api/promotions.api';
+import { getPromotionStatus } from '../../api/promotions.api';
 import { useAsync, useDocumentTitle } from '../../hooks';
 import type { BookingResponse, BookingStatus, PromotionResponse } from '../../types';
 import { BOOKING_STATUS, PAYMENT_STATUS, formatDateTime, formatVND } from '../../utils/format';
@@ -208,12 +209,22 @@ export function PromotionsAdminPage() {
           {
             title: 'Trạng thái',
             width: 130,
-            render: (_, p) => (
-              <Space size={2} wrap>
-                {isUsable(p) ? <Tag color="green">Hiệu lực</Tag> : <Tag>{p.active ? 'Hết hạn/hết lượt' : 'Đã tắt'}</Tag>}
-                {p.featured && <Tag color="gold">Nổi bật</Tag>}
-              </Space>
-            ),
+            render: (_, p) => {
+              const status = getPromotionStatus(p);
+              const label = {
+                active: <Tag color="green">Hiệu lực</Tag>,
+                upcoming: <Tag color="blue">Chưa bắt đầu</Tag>,
+                expired: <Tag>Đã hết hạn</Tag>,
+                exhausted: <Tag color="orange">Hết lượt</Tag>,
+                disabled: <Tag>Đã tắt</Tag>,
+              }[status];
+              return (
+                <Space size={2} wrap>
+                  {label}
+                  {p.featured && <Tag color="gold">Nổi bật</Tag>}
+                </Space>
+              );
+            },
           },
           {
             title: '',
@@ -309,8 +320,43 @@ export function UsersAdminPage() {
   const { params, set } = useQueryState();
   const q = { keyword: params.get('keyword') || undefined, page: Number(params.get('page') ?? 0) };
   const { data, loading, reload } = useAsync(() => adminListUsers(q), [params.toString()]);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createForm] = Form.useForm<{
+    fullName: string;
+    email: string;
+    password: string;
+    phone?: string;
+    role: 'USER' | 'ADMIN';
+  }>();
+
+  const submitCreate = async (values: {
+    fullName: string;
+    email: string;
+    password: string;
+    phone?: string;
+    role: 'USER' | 'ADMIN';
+  }) => {
+    setCreating(true);
+    try {
+      await adminCreateUser(values);
+      message.success('Đã tạo tài khoản và gửi link xác minh email');
+      setCreateOpen(false);
+      createForm.resetFields();
+      reload();
+    } catch (error) {
+      message.error(errorMessage(error));
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
-    <Card title="Người dùng">
+    <Card title="Người dùng" extra={<Button type="primary" onClick={() => {
+      createForm.resetFields();
+      createForm.setFieldsValue({ role: 'USER' });
+      setCreateOpen(true);
+    }}>+ Tạo tài khoản</Button>}>
       <Input.Search allowClear className="mb-4" style={{ maxWidth: 320 }} placeholder="Tên, email, SĐT" defaultValue={q.keyword} onSearch={(v) => set({ keyword: v })} />
       <Table
         rowKey="id"
@@ -326,17 +372,54 @@ export function UsersAdminPage() {
           { title: 'Vai trò', dataIndex: 'role', render: (v) => <Tag color={v === 'ADMIN' ? 'purple' : 'default'}>{v}</Tag>, width: 90 },
           { title: 'Xác minh email', dataIndex: 'emailVerified', render: (v) => (v ? <Tag color="green">Đã xác minh</Tag> : <Tag>Chưa</Tag>), width: 130 },
           { title: 'Đăng nhập cuối', dataIndex: 'lastLoginAt', render: formatDateTime, width: 140 },
-          { title: 'Số đơn', dataIndex: 'bookingCount', width: 80 },
           {
             title: '',
             width: 110,
-            render: (_, u) =>
-              u.locked ? (
-                <Button size="small" onClick={() => adminUnlockUser(u.id).then(() => (message.success('Đã gỡ khoá đăng nhập'), reload()))}>Gỡ khoá</Button>
+            render: (_, user) =>
+              user.locked ? (
+                <Button
+                  size="small"
+                  onClick={() => adminUnlockUser(user.id)
+                    .then(() => (message.success('Đã gỡ khoá đăng nhập'), reload()))
+                    .catch((error) => message.error(errorMessage(error)))}
+                >
+                  Gỡ khoá
+                </Button>
               ) : null,
           },
         ]}
       />
+      <Modal
+        open={createOpen}
+        title="Tạo tài khoản đăng nhập"
+        onCancel={() => setCreateOpen(false)}
+        onOk={() => createForm.submit()}
+        confirmLoading={creating}
+        destroyOnClose
+      >
+        <Form form={createForm} layout="vertical" onFinish={submitCreate} initialValues={{ role: 'USER' }}>
+          <Form.Item name="fullName" label="Họ tên" rules={[{ required: true, whitespace: true }]}>
+            <Input maxLength={255} />
+          </Form.Item>
+          <Form.Item name="email" label="Email đăng nhập" rules={[{ required: true, type: 'email' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item
+            name="password"
+            label="Mật khẩu tạm"
+            rules={[{ required: true, min: 8, message: 'Mật khẩu cần ít nhất 8 ký tự' }]}
+            extra="Cần ít nhất 8 ký tự, có chữ và số."
+          >
+            <Input.Password />
+          </Form.Item>
+          <Form.Item name="phone" label="Số điện thoại">
+            <Input maxLength={20} />
+          </Form.Item>
+          <Form.Item name="role" label="Vai trò" rules={[{ required: true }]}>
+            <Select options={[{ value: 'USER', label: 'Người dùng' }, { value: 'ADMIN', label: 'Quản trị viên' }]} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </Card>
   );
 }

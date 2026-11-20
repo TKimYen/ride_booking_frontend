@@ -1,10 +1,6 @@
 /**
- * API khu Admin. Chuyến xe, điểm dừng, danh mục, đơn hàng và thống kê đã nối API thật
- * (booking-service qua gateway). Khuyến mãi và người dùng vẫn là dữ liệu cứng — ghi chú ở
- * từng phần.
+ * API khu Admin. Các màn quản lý dùng dữ liệu thật qua API gateway.
  */
-import dayjs from 'dayjs';
-import { promotions, companies as mockCompanies, routes as mockRoutes, users } from '../mock/db';
 import type {
   BookingResponse,
   BookingStatus,
@@ -24,10 +20,12 @@ import type {
   TripSearchItemResponse,
   TripStatus,
   UpcomingTripItem,
+  UserProfile,
+  Role,
 } from '../types';
 import { normalizeVN } from '../utils/format';
 import { getCompanyProfile } from './catalog.api';
-import { ApiError, apiClient, get, mock, paginate } from './client';
+import { ApiError, apiClient, get, paginate } from './client';
 
 const post = <T>(url: string, body?: unknown) => apiClient.post<T>(url, body).then((r) => r.data);
 const put = <T>(url: string, body?: unknown) => apiClient.put<T>(url, body).then((r) => r.data);
@@ -223,57 +221,38 @@ export const adminListBookings = (q: {
 export const adminCancelBooking = (id: number, reason: string) =>
   post<{ booking: BookingResponse; refund: RefundItem | null }>(`/api/admin/bookings/${id}/cancel`, { reason: reason.trim() });
 
-// ============ Khuyến mãi (vẫn dữ liệu cứng — phần của Thái, BE đã có /api/admin/promotions) ============
+// ============ Khuyến mãi ============
 export type PromotionForm = Omit<PromotionResponse, 'id' | 'usedCount' | 'companyName' | 'routeName'>;
-export const adminListPromotions = () => mock(() => [...promotions].sort((a, b) => b.id - a.id));
+export const adminListPromotions = () => get<PromotionResponse[]>('/api/admin/promotions');
 export const adminSavePromotion = (id: number | null, f: PromotionForm) =>
-  mock(() => {
-    const code = f.code.trim().toUpperCase();
-    if (promotions.some((p) => p.code === code && p.id !== id)) throw new ApiError(409, `Mã '${code}' đã tồn tại`);
-    if (!dayjs(f.endsAt).isAfter(dayjs(f.startsAt))) throw new ApiError(400, 'Thời gian kết thúc phải sau bắt đầu');
-    if (f.discountType === 'PERCENT' && (f.discountValue <= 0 || f.discountValue > 100))
-      throw new ApiError(400, 'Giảm theo % phải từ 1 đến 100');
-    const data = {
-      ...f,
-      code,
-      companyName: f.companyId ? mockCompanies.find((c) => c.id === f.companyId)?.name ?? null : null,
-      routeName: f.routeId ? mockRoutes.find((r) => r.id === f.routeId)?.name ?? null : null,
-    };
-    if (id == null) {
-      const p = { id: Math.max(0, ...promotions.map((x) => x.id)) + 1, usedCount: 0, ...data };
-      promotions.push(p);
-      return p;
-    }
-    const p = promotions.find((x) => x.id === id)!;
-    Object.assign(p, data);
-    return p;
-  });
-export const adminDeletePromotion = (id: number) =>
-  mock(() => {
-    const p = promotions.find((x) => x.id === id)!;
-    if (p.usedCount > 0) throw new ApiError(409, 'Mã đã được dùng, hãy tắt thay vì xoá');
-    promotions.splice(promotions.indexOf(p), 1);
-    return { ok: true };
-  });
+  id == null ? post<PromotionResponse>('/api/admin/promotions', f) : put<PromotionResponse>(`/api/admin/promotions/${id}`, f);
+export const adminDeletePromotion = (id: number) => del(`/api/admin/promotions/${id}`);
 
 // ============ Đánh giá ============
 // Đã nối API thật ở reviews.api.ts (BE việc 3.4); giữ tên cũ để trang admin không phải đổi import.
 export { adminListReviews, adminSetReviewHidden } from './reviews.api';
 
-// ============ Người dùng (vẫn dữ liệu cứng — user-service/auth-service) ============
-export const adminListUsers = (q: { keyword?: string; page?: number; size?: number }) =>
-  mock(() => {
-    const k = q.keyword ? normalizeVN(q.keyword) : '';
-    const list = users.filter(
-      (u) => !k || normalizeVN(u.fullName).includes(k) || u.email.includes(k) || (u.phone ?? '').includes(k),
-    );
-    return paginate(list, q.page ?? 0, q.size ?? 20);
-  });
-export const adminUnlockUser = (id: number) =>
-  mock(() => {
-    users.find((u) => u.id === id)!.locked = false;
-    return { ok: true };
-  });
+// ============ Người dùng ============
+export const adminListUsers = async (q: { keyword?: string; page?: number; size?: number }) => {
+  const users = await get<UserProfile[]>('/api/auth/admin/users');
+  const keyword = q.keyword ? normalizeVN(q.keyword) : '';
+  const filtered = users.filter(
+    (user) =>
+      !keyword ||
+      normalizeVN(user.fullName).includes(keyword) ||
+      user.email.toLowerCase().includes(keyword) ||
+      (user.phone ?? '').includes(keyword),
+  );
+  return paginate(filtered, q.page ?? 0, q.size ?? 20);
+};
+export const adminCreateUser = (user: {
+  fullName: string;
+  email: string;
+  password: string;
+  phone?: string;
+  role: Role;
+}) => post<UserProfile>('/api/admin/users', user);
+export const adminUnlockUser = (id: number) => apiClient.patch(`/api/admin/users/${id}/unlock`).then((r) => r.data);
 
 // ============ Dashboard [3.5] — /api/admin/stats/* ============
 export interface StatsRange {
@@ -282,11 +261,11 @@ export interface StatsRange {
   companyId?: number;
 }
 
-/** GET /api/admin/stats/overview — doanh thu, vé bán, đơn mới/huỷ, chuyến sắp chạy. */
-export const statsOverview = (r: StatsRange) => get<StatsOverview>('/api/admin/stats/overview', { ...r });
+/** GET /api/admin/stats/summary — doanh thu, vé bán, đơn mới/huỷ, chuyến sắp chạy. */
+export const statsOverview = (r: StatsRange) => get<StatsOverview>('/api/admin/stats/summary', { ...r });
 
 /** GET /api/admin/stats/revenue — đủ mọi ngày, ngày trống = 0. */
-export const statsRevenueDaily = (r: StatsRange) => get<DailyRevenuePoint[]>('/api/admin/stats/revenue', { ...r });
+export const statsRevenueDaily = (r: StatsRange) => get<DailyRevenuePoint[]>('/api/admin/stats/revenue-daily', { ...r });
 
 /** GET /api/admin/stats/bookings-by-status — luôn đủ 5 trạng thái. */
 export const statsBookingsByStatus = (r: StatsRange) =>
@@ -299,25 +278,5 @@ export const statsTopRoutes = (r: StatsRange, limit = 8) => get<TopRouteItem[]>(
  * Chuyến ACTIVE khởi hành trong `hours` giờ tới. Không có API riêng: lấy từ danh sách chuyến
  * của admin trong hai ngày rồi lọc theo giờ.
  */
-export const statsUpcomingTrips = async (hours = 24, companyId?: number): Promise<UpcomingTripItem[]> => {
-  const now = dayjs();
-  const until = now.add(hours, 'hour');
-  const page = await adminListTrips({
-    status: 'ACTIVE',
-    companyId,
-    from: now.format('YYYY-MM-DD'),
-    to: until.format('YYYY-MM-DD'),
-    size: 100,
-  });
-  return page.content
-    .filter((r) => dayjs(r.trip.departureTime).isAfter(now) && dayjs(r.trip.departureTime).isBefore(until))
-    .sort((a, b) => a.trip.departureTime.localeCompare(b.trip.departureTime))
-    .map((r) => ({
-      tripId: r.trip.id,
-      routeName: r.trip.routeName,
-      companyName: r.trip.companyName,
-      departureTime: r.trip.departureTime,
-      booked: r.taken,
-      total: r.total,
-    }));
-};
+export const statsUpcomingTrips = (hours = 24, companyId?: number): Promise<UpcomingTripItem[]> =>
+  get<UpcomingTripItem[]>('/api/admin/stats/upcoming-trips', { hours, companyId });

@@ -1,4 +1,5 @@
 import { CheckCircle2, Printer, XCircle } from 'lucide-react';
+import { useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getBooking } from '../../api/bookings.api';
 import TicketView from '../../components/booking/TicketView';
@@ -13,8 +14,14 @@ export default function ResultPage() {
   const bookingId = Number(params.get('bookingId'));
   const user = useAuthStore((s) => s.user);
   const guestToken = useBookingStore((s) => s.guestTickets[bookingId]?.guestToken);
-  const { data: b, loading, error } = useAsync(() => getBooking(bookingId, user?.id ?? null, guestToken), [bookingId]);
+  const { data: b, loading, error, reload } = useAsync(() => getBooking(bookingId, user?.id ?? null, guestToken), [bookingId]);
   useDocumentTitle('Kết quả đặt vé');
+
+  useEffect(() => {
+    if (b?.status !== 'PENDING') return;
+    const timer = window.setInterval(reload, 2000);
+    return () => window.clearInterval(timer);
+  }, [b?.status, reload]);
 
   if (loading) return <div className="container-x py-6"><Skeleton className="h-96" /></div>;
   if (error) return <div className="container-x py-6"><ErrorBox message={error} /></div>;

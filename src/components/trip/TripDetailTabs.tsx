@@ -36,12 +36,16 @@ export const DETAIL_TABS: { key: DetailTab; label: string }[] = [
 const AMENITY_ICONS: Record<string, LucideIcon> = {
   wifi: Wifi,
   'cup-soda': CupSoda,
+  droplet: CupSoda,
   bed: BedDouble,
   'plug-zap': PlugZap,
+  plug: PlugZap,
   'panel-left': PanelLeft,
   snowflake: Snowflake,
   bath: Bath,
   cookie: Cookie,
+  toilet: Bath,
+  tv: PanelLeft,
 };
 
 export const promoText = (p: PromotionResponse) =>

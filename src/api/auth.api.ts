@@ -7,6 +7,11 @@ export interface AuthResponse {
   user: AuthUser;
 }
 
+export interface RegistrationResponse {
+  email: string;
+  message: string;
+}
+
 /** user-service lưu giới tính bằng tiếng Việt ("Nam" | "Nữ" | "Khác"); trang dùng mã cố định. */
 const GENDER_TO_API: Record<NonNullable<UserProfile['gender']>, string> = { MALE: 'Nam', FEMALE: 'Nữ', OTHER: 'Khác' };
 const GENDER_FROM_API: Record<string, UserProfile['gender']> = { Nam: 'MALE', 'Nữ': 'FEMALE', Khác: 'OTHER' };
@@ -45,12 +50,18 @@ const toSession = (b: AuthBody): AuthResponse => ({
 export const login = async (email: string, password: string) =>
   toSession((await apiClient.post<AuthBody>('/api/auth/login', { email: email.trim(), password })).data);
 
-/**
- * POST /api/auth/register — backend tạo tài khoản, gửi email xác minh và trả luôn cặp token,
- * nên đăng ký xong là đã đăng nhập.
- */
+/** POST /api/auth/register — tạo tài khoản và gửi link xác minh, chưa cấp phiên đăng nhập. */
 export const register = async (fullName: string, email: string, password: string) =>
-  toSession((await apiClient.post<AuthBody>('/api/auth/register', { fullName: fullName.trim(), email: email.trim(), password })).data);
+  (await apiClient.post<RegistrationResponse>('/api/auth/register', {
+    fullName: fullName.trim(),
+    email: email.trim(),
+    password,
+  })).data;
+
+/** POST /api/auth/resend-verification — gửi lại link xác minh nếu tài khoản chưa xác minh. */
+export const resendVerification = async (email: string) => {
+  await apiClient.post('/api/auth/resend-verification', { email: email.trim() });
+};
 
 /** POST /api/auth/logout — thu hồi refresh token. Lỗi mạng thì bỏ qua, trang vẫn xoá phiên. */
 export const logoutSession = async (refreshToken: string | null) => {

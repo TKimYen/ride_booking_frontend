@@ -120,8 +120,24 @@ function TripFormDrawer({ open, row, onClose, onSaved }: { open: boolean; row: A
         <Form.Item name="busType" label="Loại xe" rules={[{ required: true }]} extra={locked ? 'Đã có ghế bán/giữ nên không đổi được loại xe' : undefined}>
           <Select disabled={locked} options={busTypes.map((b) => ({ value: b.code, label: `${b.name} · ${b.seatCount} ghế · ${b.floors} tầng` }))} />
         </Form.Item>
-        <Form.Item name="departureTime" label="Giờ khởi hành" rules={[{ required: true, message: 'Chọn giờ đi' }]}>
-          <DatePicker showTime={{ format: 'HH:mm' }} format="HH:mm DD/MM/YYYY" style={{ width: '100%' }} onChange={suggestArrival} />
+        <Form.Item
+          name="departureTime"
+          label="Giờ khởi hành"
+          rules={[
+            { required: true, message: 'Chọn giờ đi' },
+            {
+              validator: (_, value: Dayjs) =>
+                !value || value.isAfter(dayjs()) ? Promise.resolve() : Promise.reject(new Error('Giờ khởi hành phải sau thời điểm hiện tại')),
+            },
+          ]}
+        >
+          <DatePicker
+            showTime={{ format: 'HH:mm' }}
+            format="HH:mm DD/MM/YYYY"
+            style={{ width: '100%' }}
+            disabledDate={(date) => date.isBefore(dayjs().startOf('day'))}
+            onChange={suggestArrival}
+          />
         </Form.Item>
         <Form.Item
           name="arrivalTime"

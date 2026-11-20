@@ -1,7 +1,7 @@
 import { CircleCheck, CircleX, MailCheck } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
-import { forgotPassword, login, register, resetPassword, verifyEmail } from '../../api/auth.api';
+import { forgotPassword, login, register, resendVerification, resetPassword, verifyEmail } from '../../api/auth.api';
 import { errorMessage } from '../../api/client';
 import { Field, Spinner, toast } from '../../components/common';
 import { useDocumentTitle } from '../../hooks';
@@ -34,9 +34,12 @@ export function LoginPage() {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const setSession = useAuthStore((s) => s.setSession);
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(params.get('email') ?? '');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [canResendVerification, setCanResendVerification] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendNotice, setResendNotice] = useState('');
   const [loading, setLoading] = useState(false);
   const redirect = params.get('redirect');
 
@@ -45,6 +48,8 @@ export function LoginPage() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setCanResendVerification(false);
+    setResendNotice('');
     setLoading(true);
     try {
       const res = await login(email, password);
@@ -52,9 +57,24 @@ export function LoginPage() {
       toast.success(`Xin chào ${res.user.fullName}`);
       navigate(res.user.role === 'ADMIN' && !redirect ? '/admin' : (redirect ?? '/'), { replace: true });
     } catch (err) {
-      setError(errorMessage(err));
+      const message = errorMessage(err);
+      setError(message);
+      setCanResendVerification(/email chưa được xác minh/i.test(message));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const resendVerificationLink = async () => {
+    setResending(true);
+    setResendNotice('');
+    try {
+      await resendVerification(email);
+      setResendNotice('Nếu tài khoản chưa xác minh, liên kết mới đã được gửi. Hãy kiểm tra hộp thư hoặc Mailpit ở localhost:8025.');
+    } catch (err) {
+      setResendNotice(errorMessage(err));
+    } finally {
+      setResending(false);
     }
   };
 
@@ -78,6 +98,14 @@ export function LoginPage() {
           <Link to="/quen-mat-khau" className="text-primary">Quên mật khẩu?</Link>
         </div>
         {error && <p className="m-0 text-sm text-danger">{error}</p>}
+        {canResendVerification && (
+          <div className="text-sm">
+            <button type="button" className="text-primary underline" onClick={resendVerificationLink} disabled={resending}>
+              {resending ? 'Đang gửi...' : 'Gửi lại link xác minh email'}
+            </button>
+            {resendNotice && <p className="mt-1 text-muted">{resendNotice}</p>}
+          </div>
+        )}
         <button className="btn-primary w-full" disabled={loading}>
           {loading ? 'Đang đăng nhập...' : 'Đăng nhập'}
         </button>
@@ -103,7 +131,6 @@ export function LoginPage() {
 export function RegisterPage() {
   useDocumentTitle('Đăng ký');
   const [params] = useSearchParams();
-  const setSession = useAuthStore((s) => s.setSession);
   const [form, setForm] = useState({ fullName: params.get('name') ?? '', email: params.get('email') ?? '', password: '', confirm: '' });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [done, setDone] = useState<string | null>(null);
@@ -122,9 +149,7 @@ export function RegisterPage() {
     setLoading(true);
     try {
       const res = await register(form.fullName, form.email, form.password);
-      // Backend trả luôn cặp token: đăng ký xong là đăng nhập, email xác minh gửi song song.
-      setSession(res);
-      setDone(res.user.email);
+      setDone(res.email);
     } catch (err) {
       const message = errorMessage(err);
       setErrors(/mật khẩu/i.test(message) ? { password: message } : { email: message });
@@ -138,11 +163,11 @@ export function RegisterPage() {
       <AuthCard title="Tạo tài khoản thành công">
         <MailCheck size={48} className="text-success" />
         <p className="text-sm">
-          Bạn đã được đăng nhập. Chúng tôi cũng đã gửi liên kết xác minh tới <b>{done}</b> — hãy bấm vào liên kết trong email để
-          xác minh địa chỉ (môi trường local: xem ở Mailpit http://localhost:8025).
+          Tài khoản đã được tạo nhưng bạn cần xác minh email trước khi đăng nhập. Chúng tôi đã gửi liên kết tới <b>{done}</b>.
+          Môi trường local: mở Mailpit tại <b>http://localhost:8025</b>, bấm link xác minh rồi quay lại đăng nhập.
         </p>
-        <Link to="/" className="btn-primary w-full">
-          Bắt đầu tìm chuyến
+        <Link to={`/dang-nhap?email=${encodeURIComponent(done)}`} className="btn-primary w-full">
+          Tới đăng nhập
         </Link>
       </AuthCard>
     );
@@ -298,7 +323,7 @@ export function VerifyEmailPage() {
         <>
           <CircleCheck size={48} className="text-success" />
           <p className="text-sm">Email của bạn đã được xác minh.</p>
-          <Link to="/" className="btn-primary w-full">Về trang chủ</Link>
+          <Link to="/dang-nhap" className="btn-primary w-full">Đăng nhập</Link>
         </>
       )}
       {state.status === 'error' && (
